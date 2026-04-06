@@ -1,0 +1,120 @@
+#!/bin/bash
+set -Eeuo pipefail
+set -x
+
+# Configuration
+DB_NAME="CenAlert_db"
+DB_USER="CenAlert"
+DB_PASSWORD=$(cat db_password.txt)
+SCHEMA_FILE="sql/schema.sql"
+DATA_DIR="data"
+EXPLANATION_FILE="$DATA_DIR/explanations.csv"
+VAR_DIR="var"
+PGDATA_DIR="$VAR_DIR/pgdata"
+LOG_FILE="$VAR_DIR/logfile"
+SOCKET_DIR="$VAR_DIR/socket"
+
+export PGDATA="$PGDATA_DIR"
+export PGPASSWORD="$DB_PASSWORD"
+
+function is_db_running {
+    pg_ctl -D "$PGDATA_DIR" status > /dev/null 2>&1
+}
+
+function init_db_dir {
+    if [ -d "$PGDATA_DIR" ]; then
+        echo "Error: data directory already exists"
+        exit 1
+    fi
+
+    mkdir -p "$PGDATA_DIR" "$SOCKET_DIR"
+    initdb -D "$PGDATA_DIR" --username="$DB_USER" --pwfile=<(echo "$DB_PASSWORD")
+}
+
+function start_db {
+    if is_db_running; then
+        echo "PostgreSQL is already running."
+        return 0
+    fi
+
+    mkdir -p "$SOCKET_DIR"
+    pg_ctl -D "$PGDATA_DIR" -l "$LOG_FILE" -o "-k $(realpath "$SOCKET_DIR")" start
+
+    until psql -U "$DB_USER" -h "$(realpath "$SOCKET_DIR")" -d postgres -c '\q' 2>/dev/null; do
+        sleep 0.5
+    done
+}
+
+function stop_db {
+    if ! is_db_running; then
+        echo "PostgreSQL is not running."
+        return 0
+    fi
+
+    pg_ctl -D "$PGDATA_DIR" -m fast stop
+}
+
+function create_db {
+    if [ ! -d "$PGDATA_DIR" ]; then
+        init_db_dir
+    fi
+
+    start_db
+
+    createdb -U "$DB_USER" --host="$(realpath "$SOCKET_DIR")" --no-password "$DB_NAME"
+
+    psql -U "$DB_USER" --host="$(realpath "$SOCKET_DIR")" --no-password -d "$DB_NAME" -f "$SCHEMA_FILE"
+
+    if [ -d "$DATA_DIR" ]; then
+        python3 src/load_anomalies.py "$DATA_DIR" "$DB_NAME" "$DB_USER" "$SOCKET_DIR"
+    fi
+
+    if [ -f "$EXPLANATION_FILE" ]; then
+        python3 src/load_explanations.py "$EXPLANATION_FILE" "$DB_NAME" "$DB_USER" "$SOCKET_DIR"
+    fi
+
+}
+
+function update_db {
+    if [ ! -d "$PGDATA_DIR" ]; then
+        echo "[ERROR] Database has not been initialized. Run create_db first."
+        exit 1
+    fi
+
+    start_db
+
+    if [ -d "$DATA_DIR" ]; then
+        python3 src/load_anomalies.py "$DATA_DIR" "$DB_NAME" "$DB_USER" "$(realpath "$SOCKET_DIR")"
+    else
+        echo "[WARNING] Data directory '$DATA_DIR' not found. Skipping update."
+    fi
+    if [ -f "$EXPLANATION_FILE" ]; then
+        python3 src/load_explanations.py "$EXPLANATION_FILE" "$DB_NAME" "$DB_USER" "$SOCKET_DIR"
+    else
+        echo "[WARNING] Explanation spreadsheet '$DATA_DIR/explanations.csv' not found. Skipping update."
+    fi
+    
+}
+
+function destroy_db {
+    stop_db
+    rm -rf "$VAR_DIR"
+    echo "Database destroyed successfully."
+}
+
+function reset_db {
+    destroy_db
+    create_db
+    echo "Database reset successfully."
+}
+
+function dump_db {
+    start_db
+    psql -U "$DB_USER" --host="$(realpath "$SOCKET_DIR")" -d "$DB_NAME" -c "SELECT * FROM anomalies;"
+    psql -U "$DB_USER" --host="$(realpath "$SOCKET_DIR")" -d "$DB_NAME" -c "SELECT * FROM explanations;"
+}
+
+# Route to appropriate command
+COMMAND="$1"
+shift
+"$COMMAND" "$@"
