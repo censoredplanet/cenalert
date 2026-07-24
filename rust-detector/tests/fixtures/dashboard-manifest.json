@@ -1,0 +1,24 @@
+[
+  {
+    "country": "RU",
+    "dashboard_export": "cp-cenalert-russia-from-31-12-2010-till-22-07-2026-search-volume.json",
+    "first_date": "2011-01-01",
+    "last_date": "2026-07-21",
+    "observations": 5681,
+    "zero_observations": 18,
+    "sha256": "b7dc2ed3eb039049403972de40a57acc4c8392ec359d0530d067801b0980c34c",
+    "python_anomalies": 25,
+    "rust_anomalies": 25
+  },
+  {
+    "country": "SS",
+    "dashboard_export": "cp-cenalert-south-sudan-from-31-12-2010-till-22-07-2026-search-volume.json",
+    "first_date": "2011-01-01",
+    "last_date": "2026-07-22",
+    "observations": 5682,
+    "zero_observations": 5021,
+    "sha256": "5f79c1a625dcbddecd0deb04eedc505a4e8db371951e3554929a0af4ecaf250f",
+    "python_anomalies": 3,
+    "rust_anomalies": 3
+  }
+]

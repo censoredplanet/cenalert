@@ -1,0 +1,7 @@
+numpy==2.2.6
+scipy==1.15.3
+polars==1.30.0
+more-itertools==10.7.0
+statsforecast==2.0.1
+scikit-learn==1.7.0
+isotree==0.6.1.post8
