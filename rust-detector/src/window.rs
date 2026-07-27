@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use serde::Serialize;
 
+use crate::croston::croston_sba_forecast_from_arrivals;
 use crate::statistics::{mean, population_std, winsorize_upper_five_percent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -23,8 +24,10 @@ pub enum DemandCategory {
 pub struct SlidingWindow {
     capacity: usize,
     values: VecDeque<f64>,
+    sorted_values: Vec<f64>,
     interarrivals: VecDeque<usize>,
     last_arrival: Option<usize>,
+    moments: Option<(f64, f64)>,
 }
 
 impl SlidingWindow {
@@ -33,8 +36,10 @@ impl SlidingWindow {
         Self {
             capacity,
             values: VecDeque::with_capacity(capacity),
+            sorted_values: Vec::with_capacity(capacity),
             interarrivals: VecDeque::with_capacity(capacity),
             last_arrival: None,
+            moments: None,
         }
     }
 
@@ -60,8 +65,10 @@ impl SlidingWindow {
 
     pub fn clear(&mut self) {
         self.values.clear();
+        self.sorted_values.clear();
         self.interarrivals.clear();
         self.last_arrival = None;
+        self.moments = None;
     }
 
     pub fn insert(&mut self, value: f64, timestamp: usize) {
@@ -77,32 +84,53 @@ impl SlidingWindow {
             .last_arrival
             .map_or(self.capacity, |last_arrival| timestamp - last_arrival);
         self.values.push_back(value);
+        let sorted_position = self
+            .sorted_values
+            .binary_search_by(|candidate| candidate.total_cmp(&value))
+            .unwrap_or_else(|position| position);
+        self.sorted_values.insert(sorted_position, value);
         self.interarrivals.push_back(interarrival);
         self.last_arrival = Some(timestamp);
 
         if self.values.len() > self.capacity {
-            self.values.pop_front();
+            let removed = self.values.pop_front().expect("window is not empty");
+            let sorted_position = self
+                .sorted_values
+                .binary_search_by(|candidate| candidate.total_cmp(&removed))
+                .expect("sorted values mirror the window");
+            self.sorted_values.remove(sorted_position);
         }
         if self.interarrivals.len() > self.capacity {
             self.interarrivals.pop_front();
         }
+        self.moments = None;
     }
 
     pub fn values(&self) -> Vec<f64> {
         self.values.iter().copied().collect()
     }
 
+    pub(crate) fn sorted_values(&self) -> &[f64] {
+        &self.sorted_values
+    }
+
+    pub(crate) fn shapiro_shift(&self) -> f64 {
+        self.values[self.values.len() / 2]
+    }
+
     pub fn replace_values(&mut self, values: impl IntoIterator<Item = f64>) {
         self.values = values.into_iter().collect();
         assert_eq!(self.values.len(), self.interarrivals.len());
+        self.rebuild_sorted_values();
+        self.moments = None;
     }
 
     pub fn mean(&mut self) -> f64 {
-        mean(self.values.make_contiguous())
+        self.moments().0
     }
 
     pub fn std(&mut self) -> f64 {
-        population_std(self.values.make_contiguous())
+        self.moments().1
     }
 
     pub fn coefficient_of_variation_squared(&mut self) -> f64 {
@@ -151,14 +179,25 @@ impl SlidingWindow {
         dense
     }
 
+    pub(crate) fn croston_sba_forecast(&self) -> f64 {
+        croston_sba_forecast_from_arrivals(
+            self.values.iter().copied(),
+            self.interarrivals.iter().copied(),
+        )
+    }
+
     pub fn winsorize_upper_five_percent(&mut self) {
         winsorize_upper_five_percent(self.values.make_contiguous());
+        self.rebuild_sorted_values();
+        self.moments = None;
     }
 
     pub fn scale(&mut self, factor: f64) {
         for value in &mut self.values {
             *value *= factor;
         }
+        self.rebuild_sorted_values();
+        self.moments = None;
     }
 
     pub fn recenter(&mut self, target_mean: f64, target_std: f64) {
@@ -167,6 +206,21 @@ impl SlidingWindow {
         for value in &mut self.values {
             *value = ((*value - current_mean) / current_std) * target_std + target_mean;
         }
+        self.rebuild_sorted_values();
+        self.moments = None;
+    }
+
+    fn moments(&mut self) -> (f64, f64) {
+        *self.moments.get_or_insert_with(|| {
+            let values = self.values.make_contiguous();
+            (mean(values), population_std(values))
+        })
+    }
+
+    fn rebuild_sorted_values(&mut self) {
+        self.sorted_values.clear();
+        self.sorted_values.extend(self.values.iter().copied());
+        self.sorted_values.sort_unstable_by(f64::total_cmp);
     }
 }
 
@@ -197,6 +251,22 @@ mod tests {
 
         assert_eq!(window.values(), vec![4.0, 8.0]);
         assert_eq!(window.to_dense_array(), vec![4.0, 0.0, 0.0, 8.0]);
+    }
+
+    #[test]
+    fn keeps_sorted_values_in_sync_with_window_mutations() {
+        let mut window = SlidingWindow::new(3);
+        window.insert(3.0, 1);
+        window.insert(1.0, 2);
+        window.insert(2.0, 3);
+        assert_eq!(window.sorted_values(), &[1.0, 2.0, 3.0]);
+
+        window.insert(4.0, 4);
+        assert_eq!(window.values(), vec![1.0, 2.0, 4.0]);
+        assert_eq!(window.sorted_values(), &[1.0, 2.0, 4.0]);
+
+        window.scale(2.0);
+        assert_eq!(window.sorted_values(), &[2.0, 4.0, 8.0]);
     }
 
     #[test]

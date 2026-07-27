@@ -1,10 +1,14 @@
-use crate::chebyshev::chebyshev_score;
-use crate::croston::croston_sba_forecast;
+use crate::chebyshev::chebyshev_score_from_sorted;
 use crate::model::{
     AnnotatedObservation, Anomaly, DetectionResult, DetectorParameters, Observation,
 };
 use crate::statistics::{efficiency_ratio, mean};
 use crate::window::{DemandCategory, SlidingWindow};
+
+/// Common interface for concrete and ensemble anomaly detectors.
+pub trait Detector {
+    fn detect(&self, observations: &[Observation]) -> DetectionResult;
+}
 
 pub struct ChebyshevDetector {
     parameters: DetectorParameters,
@@ -14,8 +18,10 @@ impl ChebyshevDetector {
     pub fn new(parameters: DetectorParameters) -> Self {
         Self { parameters }
     }
+}
 
-    pub fn run(&self, observations: &[Observation]) -> DetectionResult {
+impl Detector for ChebyshevDetector {
+    fn detect(&self, observations: &[Observation]) -> DetectionResult {
         let mut state = DetectorState::new(self.parameters);
         let mut annotated: Vec<AnnotatedObservation> =
             observations.iter().map(AnnotatedObservation::new).collect();
@@ -42,6 +48,7 @@ struct DetectorState {
     efficiency_values: Vec<f64>,
     croston_forecast: Option<f64>,
     minimum_score: f64,
+    shapiro_workspace: Vec<f64>,
 }
 
 impl DetectorState {
@@ -54,6 +61,7 @@ impl DetectorState {
             efficiency_values: Vec::new(),
             croston_forecast: None,
             minimum_score: f64::INFINITY,
+            shapiro_workspace: Vec::with_capacity(parameters.window),
         }
     }
 
@@ -93,7 +101,7 @@ impl DetectorState {
 
         if value > 0.0 && sparse {
             if !self.active_anomaly {
-                self.croston_forecast = Some(croston_sba_forecast(&self.window.to_dense_array()));
+                self.croston_forecast = Some(self.window.croston_sba_forecast());
             }
             forecast = if self.window.is_empty() {
                 0.0
@@ -105,11 +113,15 @@ impl DetectorState {
             if previous_category.is_some_and(is_sparse) {
                 self.window.winsorize_upper_five_percent();
             }
-            let result = chebyshev_score(
-                &self.window.values(),
+            let moments = (self.window.mean(), self.window.std());
+            let result = chebyshev_score_from_sorted(
+                self.window.sorted_values(),
+                self.window.shapiro_shift(),
+                &mut self.shapiro_workspace,
                 value,
                 self.parameters.z,
                 self.parameters.k,
+                moments,
             );
             score = result.score;
             self.minimum_score = result.minimum_score;
@@ -336,7 +348,7 @@ mod tests {
         // Avoid the sparse residual path during the synthetic first
         // interarrival; this test isolates the dense score path.
         detector_parameters.min_residual = 20.0;
-        let result = ChebyshevDetector::new(detector_parameters).run(&observations(&values));
+        let result = ChebyshevDetector::new(detector_parameters).detect(&observations(&values));
 
         assert_eq!(result.anomalies.len(), 1);
         assert_eq!(
@@ -357,7 +369,7 @@ mod tests {
     fn detects_sparse_residual_anomaly() {
         let values = [0.0, 5.0, 0.0, 0.0, 5.0, 0.0, 0.0, 5.0, 25.0, 0.0, 5.0];
 
-        let result = ChebyshevDetector::new(parameters(4)).run(&observations(&values));
+        let result = ChebyshevDetector::new(parameters(4)).detect(&observations(&values));
 
         assert_eq!(result.anomalies.len(), 1);
         assert_eq!(
@@ -376,7 +388,7 @@ mod tests {
     fn normalizes_google_trends_values_above_one_hundred() {
         let values = [100.0, 120.0, 80.0, 100.0];
 
-        let result = ChebyshevDetector::new(parameters(3)).run(&observations(&values));
+        let result = ChebyshevDetector::new(parameters(3)).detect(&observations(&values));
 
         assert_eq!(result.scale_factor, 1.2);
         assert_eq!(result.annotated[1].value, 100.0);
@@ -386,8 +398,17 @@ mod tests {
     fn does_not_report_warmup_points() {
         let values = [100.0, 100.0, 100.0, 10.0, 10.0];
 
-        let result = ChebyshevDetector::new(parameters(3)).run(&observations(&values));
+        let result = ChebyshevDetector::new(parameters(3)).detect(&observations(&values));
 
         assert!(result.annotated[..3].iter().all(|point| !point.anomaly));
+    }
+
+    #[test]
+    fn supports_dynamic_dispatch_through_detector_trait() {
+        let detector: Box<dyn Detector> = Box::new(ChebyshevDetector::new(parameters(3)));
+
+        let result = detector.detect(&observations(&[1.0, 2.0, 3.0, 4.0]));
+
+        assert_eq!(result.annotated.len(), 4);
     }
 }

@@ -5,7 +5,8 @@ use std::io;
 use std::path::PathBuf;
 
 use cenalert_detector::{
-    parse_dashboard_json, parse_parameters_json, Anomaly, ChebyshevDetector, DetectorParameters,
+    parse_dashboard_json, parse_parameters_json, Anomaly, ChebyshevDetector, Detector,
+    DetectorParameters,
 };
 use serde::Serialize;
 
@@ -54,7 +55,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     topics.sort_unstable();
     topics.dedup();
 
-    let result = ChebyshevDetector::new(parameters).run(&observations);
+    let result = ChebyshevDetector::new(parameters).detect(&observations);
     let output = DetectorOutput {
         algorithm: "chebyshev",
         observation_count: observations.len(),

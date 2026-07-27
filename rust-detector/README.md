@@ -15,6 +15,8 @@ The current implementation includes:
 - SciPy-compatible Shapiro-Wilk normality decisions;
 - Chebyshev/Z-score calculation;
 - the fixed-alpha Croston SBA forecast used by StatsForecast 2.0.1;
+- a common `Detector` trait for Chebyshev, future standalone detectors, and
+  ensemble detectors;
 - the production anomaly state machine and window feedback behavior; and
 - anomaly interval and metadata output.
 
@@ -77,6 +79,17 @@ python3 -m venv .venv
 cargo build --release
 ```
 
+Release builds use `opt-level = 3`, fat link-time optimization, and one codegen
+unit. For a machine-specific local benchmark, native CPU instructions can be
+enabled explicitly:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --release
+```
+
+The native build may not run on older or different processors, so it is not the
+portable default.
+
 The comparison requires equal anomaly counts and exact start, end, and peak
 dates. Score, residual, and impact must match with relative and absolute
 tolerances of `1e-8`.
@@ -122,9 +135,41 @@ Russia All Time results:
 | Implementation | Median runtime |
 | --- | ---: |
 | Python | 3.779 seconds |
-| Rust release | 0.421 seconds |
+| Initial Rust release | 0.421 seconds |
 | Speedup | **8.97×** |
 
-This establishes a clear core-runtime improvement on one full historical
-series. It does not claim that the entire parameter-tuning workflow is 8.97×
-faster, because Phase 1 excludes tuning integration.
+This original measurement established an end-to-end CLI improvement, but it
+overstates the cost relevant to parameter tuning because each Rust sample
+starts a process, parses the input, and serializes output.
+
+`examples/in_process_benchmark.rs` measures the detector in one process after
+loading the series and parameter sets once. It accepts either one parameter
+JSON file or a directory of parameter JSON files:
+
+```bash
+cargo run --release --example in_process_benchmark -- \
+  <RU-dashboard-export.json> \
+  tests/fixtures/parameters/RU.json \
+  500
+
+cargo run --release --example in_process_benchmark -- \
+  <RU-dashboard-export.json> \
+  <parameter-json-directory> \
+  5000
+```
+
+Profiling identified repeated Shapiro-Wilk window sorting as the largest named
+hotspot. The optimized window maintains sorted values, caches unchanged
+moments, and computes Croston SBA directly from demand arrivals. The outputs
+remain byte-for-byte equal to the initial Rust implementation for the recorded
+Russia and South Sudan exports.
+
+| In-process benchmark | Initial Rust | Optimized Rust | Improvement |
+| --- | ---: | ---: | ---: |
+| Russia, one parameter set | 6.83 ms/evaluation | 2.44 ms/evaluation | 2.80× |
+| South Sudan, one parameter set | 0.76 ms/evaluation | 0.25 ms/evaluation | 3.10× |
+
+A single-threaded 5,000-evaluation sweep over the Russia series, cycling through
+73 paper parameter sets, completed in 9.00 seconds. This benchmark exercises
+the detection/evaluation core only; it does not add or prescribe Aaron's future
+parameter-tuning workflow.
