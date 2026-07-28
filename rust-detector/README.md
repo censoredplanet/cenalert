@@ -18,7 +18,9 @@ The current implementation includes:
 - a common `Detector` trait for Chebyshev, future standalone detectors, and
   ensemble detectors;
 - the production anomaly state machine and window feedback behavior; and
-- anomaly interval and metadata output.
+- anomaly interval and metadata output;
+- parallel NSGA-II parameter tuning; and
+- Pareto-front knee selection compatible with the paper workflow.
 
 ## Development environment
 
@@ -64,6 +66,27 @@ cargo run --release -- \
 Use `--threads <count>` to set the Rayon worker count or `--sequential` for a
 single-threaded comparison. The output uses the paper-compatible
 `[[parameters], [objectives]]` JSON representation.
+
+## Select parameters
+
+The `select` subcommand chooses a preferred count-versus-impact tradeoff from
+the Pareto front. It follows the Python workflow by trying the same five
+convex, decreasing curve families, falling back to a seventh-degree polynomial,
+and locating the curve's knee.
+
+```bash
+cargo run --release -- \
+  select \
+  --input <pareto-front.json> \
+  --output <selected-parameters.json>
+```
+
+The output is a five-element parameter JSON accepted directly by `detect`.
+Together, the three subcommands provide this local workflow:
+
+```text
+Dashboard JSON -> tune -> Pareto front -> select -> parameters -> detect
+```
 
 ## Tests
 

@@ -4,8 +4,8 @@ use std::io::{self, BufWriter};
 use std::path::PathBuf;
 
 use cenalert_detector::{
-    parse_dashboard_json, parse_parameters_json, tune_chebyshev, Anomaly, ChebyshevDetector,
-    Detector, DetectorParameters, TuningConfig,
+    parse_dashboard_json, parse_parameters_json, select_parameters, tune_chebyshev, Anomaly,
+    ChebyshevDetector, Detector, DetectorParameters, ParetoSolution, TuningConfig,
 };
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
@@ -23,6 +23,8 @@ enum Command {
     Detect(DetectArgs),
     /// Tune Chebyshev detector parameters with NSGA-II.
     Tune(TuneArgs),
+    /// Select the preferred tradeoff from an NSGA-II Pareto front.
+    Select(SelectArgs),
 }
 
 #[derive(Debug, Args)]
@@ -60,6 +62,16 @@ struct TuneArgs {
     sequential: bool,
 }
 
+#[derive(Debug, Args)]
+struct SelectArgs {
+    /// Pareto-front JSON produced by the tune subcommand.
+    #[arg(long)]
+    input: PathBuf,
+    /// Destination for the selected five-element parameter JSON.
+    #[arg(long)]
+    output: PathBuf,
+}
+
 #[derive(Debug, Serialize)]
 struct DetectorOutput {
     algorithm: &'static str,
@@ -84,7 +96,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     match cli.command {
         Command::Detect(arguments) => run_detection(arguments),
         Command::Tune(arguments) => run_tuning(arguments),
+        Command::Select(arguments) => run_selection(arguments),
     }
+}
+
+fn run_selection(arguments: SelectArgs) -> Result<(), Box<dyn Error>> {
+    let front: Vec<ParetoSolution> = serde_json::from_reader(File::open(arguments.input)?)?;
+    let selected = select_parameters(&front)?;
+    serde_json::to_writer_pretty(
+        BufWriter::new(File::create(arguments.output)?),
+        &selected.parameters,
+    )?;
+    eprintln!(
+        "selected {}-anomaly solution at knee {} using {:?}",
+        selected.objective[0], selected.knee, selected.method
+    );
+    Ok(())
 }
 
 fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
@@ -207,5 +234,20 @@ mod tests {
         assert_eq!(arguments.evaluations, 5_000);
         assert_eq!(arguments.population_size, 100);
         assert!(!arguments.sequential);
+    }
+
+    #[test]
+    fn parses_selection_subcommand() {
+        let parsed = Cli::try_parse_from([
+            "cenalert-detector",
+            "select",
+            "--input",
+            "front.json",
+            "--output",
+            "selected.json",
+        ])
+        .unwrap();
+
+        assert!(matches!(parsed.command, Command::Select(_)));
     }
 }
