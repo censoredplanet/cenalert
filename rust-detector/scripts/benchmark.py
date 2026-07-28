@@ -35,6 +35,7 @@ def main() -> None:
     arguments = parse_arguments()
     rust_command = [
         arguments.rust_binary,
+        "detect",
         "--input",
         arguments.input,
         "--parameters",

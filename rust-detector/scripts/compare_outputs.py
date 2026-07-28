@@ -38,6 +38,7 @@ def main() -> None:
     completed = subprocess.run(
         [
             arguments.rust_binary,
+            "detect",
             "--input",
             arguments.input,
             "--parameters",

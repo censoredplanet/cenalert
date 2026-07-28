@@ -35,6 +35,7 @@ source "$HOME/.cargo/env"
 
 ```bash
 cargo run --release -- \
+  detect \
   --input <dashboard-export.json> \
   --parameters <parameters.json>
 ```
@@ -42,6 +43,27 @@ cargo run --release -- \
 The command prints JSON containing the normalized input summary, detector
 parameters, scale factor, and detected anomaly intervals. Each anomaly contains
 its start, end, peak, score, residual, and impact.
+
+## Tune parameters
+
+The `tune` subcommand reproduces the paper's Chebyshev NSGA-II search: window
+size, Z-score threshold, Chebyshev threshold, minimum residual, and efficiency
+are optimized against anomaly count and negative total impact. Candidate
+detector evaluations run in parallel through Rayon by default.
+
+```bash
+cargo run --release -- \
+  tune \
+  --input <dashboard-export.json> \
+  --output <pareto-front.json> \
+  --evaluations 5000 \
+  --population-size 100 \
+  --seed 42
+```
+
+Use `--threads <count>` to set the Rayon worker count or `--sequential` for a
+single-threaded comparison. The output uses the paper-compatible
+`[[parameters], [objectives]]` JSON representation.
 
 ## Tests
 

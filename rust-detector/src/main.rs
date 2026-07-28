@@ -1,19 +1,63 @@
-use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::io;
+use std::io::{self, BufWriter};
 use std::path::PathBuf;
 
 use cenalert_detector::{
-    parse_dashboard_json, parse_parameters_json, Anomaly, ChebyshevDetector, Detector,
-    DetectorParameters,
+    parse_dashboard_json, parse_parameters_json, tune_chebyshev, Anomaly, ChebyshevDetector,
+    Detector, DetectorParameters, TuningConfig,
 };
+use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
-#[derive(Debug)]
-struct Arguments {
+#[derive(Debug, Parser)]
+#[command(version, about = "CenAlert anomaly detection and parameter tuning")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Detect anomalies using a selected parameter set.
+    Detect(DetectArgs),
+    /// Tune Chebyshev detector parameters with NSGA-II.
+    Tune(TuneArgs),
+}
+
+#[derive(Debug, Args)]
+struct DetectArgs {
+    /// Dashboard-exported time-series JSON.
+    #[arg(long)]
     input: PathBuf,
+    /// Five-element detector parameter JSON.
+    #[arg(long)]
     parameters: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct TuneArgs {
+    /// Dashboard-exported time-series JSON.
+    #[arg(long)]
+    input: PathBuf,
+    /// Destination for the Pareto-front JSON.
+    #[arg(long)]
+    output: PathBuf,
+    /// Maximum number of detector evaluations.
+    #[arg(long, default_value_t = 5_000)]
+    evaluations: u32,
+    /// NSGA-II population size; must be even.
+    #[arg(long, default_value_t = 100)]
+    population_size: usize,
+    /// Random seed for the evolutionary operators.
+    #[arg(long)]
+    seed: Option<u64>,
+    /// Number of Rayon worker threads.
+    #[arg(long, conflicts_with = "sequential")]
+    threads: Option<usize>,
+    /// Evaluate each NSGA-II population sequentially.
+    #[arg(long)]
+    sequential: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,14 +74,20 @@ struct DetectorOutput {
 }
 
 fn main() {
-    if let Err(error) = run() {
+    if let Err(error) = run(Cli::parse()) {
         eprintln!("error: {error}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), Box<dyn Error>> {
-    let arguments = parse_arguments(env::args().skip(1))?;
+fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
+    match cli.command {
+        Command::Detect(arguments) => run_detection(arguments),
+        Command::Tune(arguments) => run_tuning(arguments),
+    }
+}
+
+fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
     let observations = parse_dashboard_json(File::open(arguments.input)?)?;
     let parameters = parse_parameters_json(File::open(arguments.parameters)?)?;
 
@@ -81,66 +131,81 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn parse_arguments(arguments: impl Iterator<Item = String>) -> Result<Arguments, String> {
-    let mut input = None;
-    let mut parameters = None;
-    let mut arguments = arguments;
-
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "--input" => input = Some(required_value("--input", &mut arguments)?),
-            "--parameters" => parameters = Some(required_value("--parameters", &mut arguments)?),
-            "--help" | "-h" => return Err(usage()),
-            unknown => return Err(format!("unknown argument: {unknown}\n\n{}", usage())),
-        }
+fn run_tuning(arguments: TuneArgs) -> Result<(), Box<dyn Error>> {
+    if arguments.threads == Some(0) {
+        return Err("threads must be at least 1".into());
+    }
+    if let Some(threads) = arguments.threads {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global()?;
     }
 
-    Ok(Arguments {
-        input: input
-            .map(PathBuf::from)
-            .ok_or_else(|| format!("missing --input\n\n{}", usage()))?,
-        parameters: parameters
-            .map(PathBuf::from)
-            .ok_or_else(|| format!("missing --parameters\n\n{}", usage()))?,
-    })
-}
-
-fn required_value(
-    option: &str,
-    arguments: &mut impl Iterator<Item = String>,
-) -> Result<String, String> {
-    arguments
-        .next()
-        .filter(|value| !value.starts_with("--"))
-        .ok_or_else(|| format!("missing value for {option}"))
-}
-
-fn usage() -> String {
-    "usage: cenalert-detector --input <dashboard.json> --parameters <parameters.json>".to_owned()
+    let observations = parse_dashboard_json(File::open(arguments.input)?)?;
+    let result = tune_chebyshev(
+        &observations,
+        TuningConfig {
+            evaluations: arguments.evaluations,
+            population_size: arguments.population_size,
+            parallel: !arguments.sequential,
+            seed: arguments.seed,
+        },
+    )?;
+    serde_json::to_writer_pretty(
+        BufWriter::new(File::create(arguments.output)?),
+        &result.solutions,
+    )?;
+    eprintln!(
+        "completed {} evaluations; wrote {} Pareto solutions",
+        result.evaluations,
+        result.solutions.len()
+    );
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use clap::CommandFactory;
+
     use super::*;
 
     #[test]
-    fn parses_required_arguments() {
-        let arguments = vec![
-            "--input".to_owned(),
-            "series.json".to_owned(),
-            "--parameters".to_owned(),
-            "RU.json".to_owned(),
-        ];
-
-        let parsed = parse_arguments(arguments.into_iter()).unwrap();
-
-        assert_eq!(parsed.input, PathBuf::from("series.json"));
-        assert_eq!(parsed.parameters, PathBuf::from("RU.json"));
+    fn clap_configuration_is_valid() {
+        Cli::command().debug_assert();
     }
 
     #[test]
-    fn rejects_missing_arguments() {
-        let error = parse_arguments(Vec::new().into_iter()).unwrap_err();
-        assert!(error.contains("missing --input"));
+    fn parses_detection_subcommand() {
+        let parsed = Cli::try_parse_from([
+            "cenalert-detector",
+            "detect",
+            "--input",
+            "series.json",
+            "--parameters",
+            "RU.json",
+        ])
+        .unwrap();
+
+        assert!(matches!(parsed.command, Command::Detect(_)));
+    }
+
+    #[test]
+    fn parses_tuning_defaults() {
+        let parsed = Cli::try_parse_from([
+            "cenalert-detector",
+            "tune",
+            "--input",
+            "series.json",
+            "--output",
+            "front.json",
+        ])
+        .unwrap();
+        let Command::Tune(arguments) = parsed.command else {
+            panic!("expected tune command");
+        };
+
+        assert_eq!(arguments.evaluations, 5_000);
+        assert_eq!(arguments.population_size, 100);
+        assert!(!arguments.sequential);
     }
 }
