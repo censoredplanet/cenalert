@@ -19,7 +19,8 @@ The current implementation includes:
   ensemble detectors;
 - the production anomaly state machine and window feedback behavior; and
 - anomaly interval and metadata output;
-- parallel NSGA-II parameter tuning; and
+- parallel NSGA-II parameter tuning;
+- optional event-label constraints for parameter tuning; and
 - Pareto-front knee selection compatible with the paper workflow.
 
 ## Development environment
@@ -66,6 +67,47 @@ cargo run --release -- \
 Use `--threads <count>` to set the Rayon worker count or `--sequential` for a
 single-threaded comparison. The output uses the paper-compatible
 `[[parameters], [objectives]]` JSON representation.
+
+The Chebyshev K search range defaults to the paper's `5–18` range and can be
+changed for experiments with `--k-min` and `--k-max`.
+
+### Preserve labeled events
+
+An optional label file constrains tuning to parameter sets that detect every
+listed event. A label is matched when an anomaly start date is within three
+days before or after its date by default:
+
+```json
+[
+  {
+    "date": "2022-02-24",
+    "scope": "country",
+    "description": "Example country-specific event"
+  },
+  {
+    "date": "2022-03-01",
+    "scope": "global",
+    "description": "Example multi-country event"
+  }
+]
+```
+
+The `scope` field preserves the distinction between country-specific and global
+events; both kinds are required constraints. Descriptions are optional.
+
+```bash
+cargo run --release -- \
+  tune \
+  --input <dashboard-export.json> \
+  --labels <labels.json> \
+  --proximity-days 3 \
+  --output <feasible-pareto-front.json>
+```
+
+The NSGA-II constraint value is the number of missed labels. Only feasible
+rank-one solutions with zero missed labels are written. Tuning returns an error
+if it finds no feasible parameter set. Omitting `--labels` preserves the fully
+unsupervised workflow.
 
 ## Select parameters
 

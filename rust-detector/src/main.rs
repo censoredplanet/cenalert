@@ -4,8 +4,9 @@ use std::io::{self, BufWriter};
 use std::path::PathBuf;
 
 use cenalert_detector::{
-    parse_dashboard_json, parse_parameters_json, select_parameters, tune_chebyshev, Anomaly,
-    ChebyshevDetector, Detector, DetectorParameters, ParetoSolution, TuningConfig,
+    parse_dashboard_json, parse_labels_json, parse_parameters_json, select_parameters,
+    tune_chebyshev, Anomaly, ChebyshevDetector, Detector, DetectorParameters, ParetoSolution,
+    TuningConfig,
 };
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
@@ -60,6 +61,18 @@ struct TuneArgs {
     /// Evaluate each NSGA-II population sequentially.
     #[arg(long)]
     sequential: bool,
+    /// Optional event labels that every feasible parameter set must detect.
+    #[arg(long)]
+    labels: Option<PathBuf>,
+    /// Maximum distance between label and anomaly start dates.
+    #[arg(long, requires = "labels")]
+    proximity_days: Option<u32>,
+    /// Lower bound of the Chebyshev K search range.
+    #[arg(long, default_value_t = 5.0)]
+    k_min: f64,
+    /// Upper bound of the Chebyshev K search range.
+    #[arg(long, default_value_t = 18.0)]
+    k_max: f64,
 }
 
 #[derive(Debug, Args)]
@@ -169,6 +182,12 @@ fn run_tuning(arguments: TuneArgs) -> Result<(), Box<dyn Error>> {
     }
 
     let observations = parse_dashboard_json(File::open(arguments.input)?)?;
+    let labels = arguments
+        .labels
+        .map(|path| parse_labels_json(File::open(path)?))
+        .transpose()?
+        .unwrap_or_default();
+    let label_count = labels.len();
     let result = tune_chebyshev(
         &observations,
         TuningConfig {
@@ -176,17 +195,30 @@ fn run_tuning(arguments: TuneArgs) -> Result<(), Box<dyn Error>> {
             population_size: arguments.population_size,
             parallel: !arguments.sequential,
             seed: arguments.seed,
+            k_min: arguments.k_min,
+            k_max: arguments.k_max,
+            labels,
+            proximity_days: arguments.proximity_days.unwrap_or(3),
         },
     )?;
     serde_json::to_writer_pretty(
         BufWriter::new(File::create(arguments.output)?),
         &result.solutions,
     )?;
-    eprintln!(
-        "completed {} evaluations; wrote {} Pareto solutions",
-        result.evaluations,
-        result.solutions.len()
-    );
+    if label_count == 0 {
+        eprintln!(
+            "completed {} evaluations; wrote {} Pareto solutions",
+            result.evaluations,
+            result.solutions.len()
+        );
+    } else {
+        eprintln!(
+            "completed {} evaluations; wrote {} feasible Pareto solutions preserving all {} labels",
+            result.evaluations,
+            result.solutions.len(),
+            label_count
+        );
+    }
     Ok(())
 }
 
@@ -234,6 +266,25 @@ mod tests {
         assert_eq!(arguments.evaluations, 5_000);
         assert_eq!(arguments.population_size, 100);
         assert!(!arguments.sequential);
+        assert_eq!(arguments.k_min, 5.0);
+        assert_eq!(arguments.k_max, 18.0);
+        assert!(arguments.labels.is_none());
+        assert!(arguments.proximity_days.is_none());
+    }
+
+    #[test]
+    fn proximity_requires_labels() {
+        assert!(Cli::try_parse_from([
+            "cenalert-detector",
+            "tune",
+            "--input",
+            "series.json",
+            "--output",
+            "front.json",
+            "--proximity-days",
+            "3",
+        ])
+        .is_err());
     }
 
     #[test]
