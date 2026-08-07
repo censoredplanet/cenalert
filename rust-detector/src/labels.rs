@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::io::Read;
@@ -20,7 +21,32 @@ pub struct EventLabel {
     pub date: NaiveDate,
     pub scope: LabelScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affected_countries: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
+}
+
+impl EventLabel {
+    pub fn new(date: NaiveDate, scope: LabelScope) -> Self {
+        Self {
+            date,
+            scope,
+            country_code: None,
+            affected_countries: Vec::new(),
+            description: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LabelMatch {
+    pub label_index: usize,
+    pub distance_days: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,16 +130,78 @@ pub fn label_coverage(
     }
 }
 
+pub fn match_anomaly_to_label(
+    anomaly: &Anomaly,
+    labels: &[EventLabel],
+    country_code: Option<&str>,
+    proximity_days: u32,
+) -> Option<LabelMatch> {
+    let proximity_days = i64::from(proximity_days);
+    labels
+        .iter()
+        .enumerate()
+        .filter(|(_, label)| label_applies_to_country(label, country_code))
+        .filter_map(|(index, label)| {
+            let distance_days = anomaly.start.signed_duration_since(label.date).num_days();
+            (distance_days.abs() <= proximity_days).then_some((index, label, distance_days))
+        })
+        .min_by_key(|(index, label, distance_days)| {
+            (
+                distance_days.abs(),
+                scope_priority(label.scope),
+                label.date,
+                *index,
+            )
+        })
+        .map(|(label_index, _, distance_days)| LabelMatch {
+            label_index,
+            distance_days,
+        })
+}
+
+pub(crate) fn required_country_labels(
+    labels: &[EventLabel],
+    country_code: Option<&str>,
+) -> Vec<EventLabel> {
+    labels
+        .iter()
+        .filter(|label| {
+            label.scope == LabelScope::Country && label_applies_to_country(label, country_code)
+        })
+        .cloned()
+        .collect()
+}
+
+fn label_applies_to_country(label: &EventLabel, country_code: Option<&str>) -> bool {
+    match label.scope {
+        LabelScope::Country => label.country_code.as_deref().is_none_or(|label_country| {
+            country_code.is_some_and(|country| country.eq_ignore_ascii_case(label_country))
+        }),
+        LabelScope::Global => {
+            label.affected_countries.is_empty()
+                || country_code.is_some_and(|country| {
+                    label
+                        .affected_countries
+                        .iter()
+                        .any(|affected| affected.eq_ignore_ascii_case(country))
+                })
+        }
+    }
+}
+
+fn scope_priority(scope: LabelScope) -> u8 {
+    match scope {
+        LabelScope::Country => 0,
+        LabelScope::Global => 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn label(date: &str, scope: LabelScope) -> EventLabel {
-        EventLabel {
-            date: NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap(),
-            scope,
-            description: None,
-        }
+        EventLabel::new(NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap(), scope)
     }
 
     fn anomaly(start: &str) -> Anomaly {
@@ -187,5 +275,46 @@ mod tests {
             label_coverage(&labels, &[anomaly("2025-01-11")], 0).missed,
             1
         );
+    }
+
+    #[test]
+    fn prioritizes_a_country_label_when_distance_is_tied() {
+        let anomaly = anomaly("2025-01-10");
+        let labels = vec![
+            label("2025-01-10", LabelScope::Global),
+            label("2025-01-10", LabelScope::Country),
+        ];
+
+        assert_eq!(
+            match_anomaly_to_label(&anomaly, &labels, Some("RU"), 3),
+            Some(LabelMatch {
+                label_index: 1,
+                distance_days: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn filters_country_labels_by_country_code() {
+        let mut ru = label("2025-01-10", LabelScope::Country);
+        ru.country_code = Some("RU".to_owned());
+        let mut tr = label("2025-01-11", LabelScope::Country);
+        tr.country_code = Some("TR".to_owned());
+        let global = label("2025-01-12", LabelScope::Global);
+
+        assert_eq!(
+            required_country_labels(&[ru, tr, global], Some("RU")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn limits_global_matches_when_affected_countries_are_known() {
+        let anomaly = anomaly("2025-01-10");
+        let mut global = label("2025-01-10", LabelScope::Global);
+        global.affected_countries = vec!["RU".to_owned(), "TR".to_owned()];
+
+        assert!(match_anomaly_to_label(&anomaly, &[global.clone()], Some("RU"), 3).is_some());
+        assert!(match_anomaly_to_label(&anomaly, &[global], Some("US"), 3).is_none());
     }
 }

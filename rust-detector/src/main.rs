@@ -187,7 +187,7 @@ fn run_tuning(arguments: TuneArgs) -> Result<(), Box<dyn Error>> {
         .map(|path| parse_labels_json(File::open(path)?))
         .transpose()?
         .unwrap_or_default();
-    let label_count = labels.len();
+    let provided_label_count = labels.len();
     let result = tune_chebyshev(
         &observations,
         TuningConfig {
@@ -205,9 +205,15 @@ fn run_tuning(arguments: TuneArgs) -> Result<(), Box<dyn Error>> {
         BufWriter::new(File::create(arguments.output)?),
         &result.solutions,
     )?;
-    if label_count == 0 {
+    if provided_label_count == 0 {
         eprintln!(
             "completed {} evaluations; wrote {} Pareto solutions",
+            result.evaluations,
+            result.solutions.len()
+        );
+    } else if result.required_labels == 0 {
+        eprintln!(
+            "completed {} evaluations without applicable country-label constraints; wrote {} Pareto solutions",
             result.evaluations,
             result.solutions.len()
         );
@@ -216,7 +222,7 @@ fn run_tuning(arguments: TuneArgs) -> Result<(), Box<dyn Error>> {
             "completed {} evaluations; wrote {} feasible Pareto solutions preserving all {} labels",
             result.evaluations,
             result.solutions.len(),
-            label_count
+            result.required_labels
         );
     }
     Ok(())

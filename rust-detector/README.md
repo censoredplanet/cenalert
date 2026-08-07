@@ -3,6 +3,9 @@
 This crate contains the incremental Rust reimplementation of CenAlert's
 production anomaly-detection path.
 
+Unless stated otherwise, run all commands below from the `rust-detector/`
+directory.
+
 The current implementation includes:
 
 - Dashboard JSON parsing (`rate` or `value`);
@@ -17,7 +20,7 @@ The current implementation includes:
 - the fixed-alpha Croston SBA forecast used by StatsForecast 2.0.1;
 - a common `Detector` trait for Chebyshev, future standalone detectors, and
   ensemble detectors;
-- the production anomaly state machine and window feedback behavior; and
+- the production anomaly state machine and window feedback behavior;
 - anomaly interval and metadata output;
 - parallel NSGA-II parameter tuning;
 - optional event-label constraints for parameter tuning; and
@@ -39,8 +42,8 @@ source "$HOME/.cargo/env"
 ```bash
 cargo run --release -- \
   detect \
-  --input <dashboard-export.json> \
-  --parameters <parameters.json>
+  --input /path/to/dashboard-export.json \
+  --parameters /path/to/parameters.json
 ```
 
 The command prints JSON containing the normalized input summary, detector
@@ -57,8 +60,8 @@ detector evaluations run in parallel through Rayon by default.
 ```bash
 cargo run --release -- \
   tune \
-  --input <dashboard-export.json> \
-  --output <pareto-front.json> \
+  --input /path/to/dashboard-export.json \
+  --output /tmp/pareto-front.json \
   --evaluations 5000 \
   --population-size 100 \
   --seed 42
@@ -73,41 +76,95 @@ changed for experiments with `--k-min` and `--k-max`.
 
 ### Preserve labeled events
 
-An optional label file constrains tuning to parameter sets that detect every
-listed event. A label is matched when an anomaly start date is within three
-days before or after its date by default:
+An optional unified label file can contain both country-specific and global
+events. During tuning, only labels for the input series' country are required
+constraints: a feasible parameter set must detect every one of them. Global
+events remain available to the label-matching API, but do not constrain tuning
+because a multi-country event is not necessarily visible in every country.
+Country labels outside the input series' date range and proximity margin are
+also ignored, so one multi-country label file can be reused with historical
+snapshots.
+
+A label is matched when an anomaly start date is within three days before or
+after its date by default:
 
 ```json
 [
   {
     "date": "2022-02-24",
     "scope": "country",
+    "country_code": "RU",
     "description": "Example country-specific event"
   },
   {
     "date": "2022-03-01",
     "scope": "global",
-    "description": "Example multi-country event"
+    "description": "Example multi-country event",
+    "affected_countries": ["RU", "TR"],
+    "metadata": {
+      "source": "Example source"
+    }
   }
 ]
 ```
 
-The `scope` field preserves the distinction between country-specific and global
-events; both kinds are required constraints. Descriptions are optional.
+`country_code` identifies the country whose tuning is constrained.
+`affected_countries` is optional and limits where a global event can be used
+for attribution; an empty list means that its affected countries are not yet
+known. Descriptions and string-valued metadata are optional. In the matching
+API, a country event is preferred when it and a global event are equally close
+to an anomaly.
 
 ```bash
 cargo run --release -- \
   tune \
-  --input <dashboard-export.json> \
-  --labels <labels.json> \
+  --input /path/to/dashboard-export.json \
+  --labels /path/to/labels.json \
   --proximity-days 3 \
-  --output <feasible-pareto-front.json>
+  --output /tmp/feasible-pareto-front.json
 ```
 
 The NSGA-II constraint value is the number of missed labels. Only feasible
-rank-one solutions with zero missed labels are written. Tuning returns an error
-if it finds no feasible parameter set. Omitting `--labels` preserves the fully
-unsupervised workflow.
+rank-one solutions with zero missed country labels are written. Tuning returns
+an error if it finds no feasible parameter set. Omitting `--labels` preserves
+the fully unsupervised workflow.
+
+### Build a local label file
+
+`scripts/build_labels.py` normalizes the four manually verified CSV sheets into
+the unified JSON schema while retaining their additional fields as metadata. It
+can also reproduce the paper-style automatic verification step:
+country events from `cenalert-paper/events/custom/Community.csv` are retained
+only when their start date is within the configured proximity of an anomaly
+detected with the paper series and selected parameters.
+
+From `rust-detector/`, build the detector and run:
+
+```bash
+cargo build --release
+
+python3 scripts/build_labels.py \
+  --filtering ../CenAlert_Filtering.csv \
+  --shutdowns ../CenAlert_Shutdowns.csv \
+  --other ../CenAlert_Other.csv \
+  --global-events ../CenAlert_Global.csv \
+  --community-events ../../cenalert-paper/events/custom/Community.csv \
+  --series-directory ../../cenalert-paper/series/012t0g \
+  --parameters-directory ../../cenalert-paper/parameters/chebyshev_selected \
+  --detector target/release/cenalert-detector \
+  --proximity-days 3 \
+  --output /tmp/cenalert-labels.json
+```
+
+The CSV inputs and JSON output can remain outside the repository. The builder
+validates required columns and dates, preserves distinct same-day records, and
+reports such groups for manual review.
+
+The manually verified sheets are included as provided; the builder does not
+revalidate those events against the selected time series. Before constrained
+tuning, confirm that the labels were verified against the same Google Trends
+keyword or topic as the input series. A mismatched series can make the
+requirement to preserve every applicable country label infeasible.
 
 ## Select parameters
 
@@ -119,8 +176,8 @@ and locating the curve's knee.
 ```bash
 cargo run --release -- \
   select \
-  --input <pareto-front.json> \
-  --output <selected-parameters.json>
+  --input /path/to/pareto-front.json \
+  --output /tmp/selected-parameters.json
 ```
 
 The output is a five-element parameter JSON accepted directly by `detect`.
@@ -137,6 +194,7 @@ cargo fmt --all -- --check
 cargo check --all-targets --all-features
 cargo test --all-targets --all-features
 cargo clippy --all-targets --all-features -- -D warnings
+python3 -m py_compile scripts/build_labels.py
 ```
 
 ## Validation
@@ -190,12 +248,12 @@ Run the comparisons from `rust-detector/`:
 
 ```bash
 .venv/bin/python scripts/compare_outputs.py \
-  --input <RU-dashboard-export.json> \
+  --input /path/to/RU-dashboard-export.json \
   --parameters tests/fixtures/parameters/RU.json \
   --rust-binary target/release/cenalert-detector
 
 .venv/bin/python scripts/compare_outputs.py \
-  --input <SS-dashboard-export.json> \
+  --input /path/to/SS-dashboard-export.json \
   --parameters tests/fixtures/parameters/SS.json \
   --rust-binary target/release/cenalert-detector
 ```
@@ -211,7 +269,7 @@ the Rust measurement also includes process startup and JSON output.
 
 ```bash
 .venv/bin/python scripts/benchmark.py \
-  --input <RU-dashboard-export.json> \
+  --input /path/to/RU-dashboard-export.json \
   --parameters tests/fixtures/parameters/RU.json \
   --rust-binary target/release/cenalert-detector \
   --iterations 3
@@ -235,13 +293,13 @@ JSON file or a directory of parameter JSON files:
 
 ```bash
 cargo run --release --example in_process_benchmark -- \
-  <RU-dashboard-export.json> \
+  /path/to/RU-dashboard-export.json \
   tests/fixtures/parameters/RU.json \
   500
 
 cargo run --release --example in_process_benchmark -- \
-  <RU-dashboard-export.json> \
-  <parameter-json-directory> \
+  /path/to/RU-dashboard-export.json \
+  /path/to/parameter-json-directory \
   5000
 ```
 
@@ -257,6 +315,5 @@ Russia and South Sudan exports.
 | South Sudan, one parameter set | 0.76 ms/evaluation | 0.25 ms/evaluation | 3.10× |
 
 A single-threaded 5,000-evaluation sweep over the Russia series, cycling through
-73 paper parameter sets, completed in 9.00 seconds. This benchmark exercises
-the detection/evaluation core only; it does not add or prescribe Aaron's future
-parameter-tuning workflow.
+73 paper parameter sets, completed in 9.00 seconds. This benchmark measures the
+detection/evaluation core rather than the NSGA-II optimizer itself.

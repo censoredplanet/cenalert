@@ -10,7 +10,8 @@ use optirustic::core::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    label_coverage, ChebyshevDetector, Detector, DetectorParameters, EventLabel, Observation,
+    label_coverage, labels::required_country_labels, ChebyshevDetector, Detector,
+    DetectorParameters, EventLabel, Observation,
 };
 
 const ANOMALY_COUNT: &str = "anomaly_count";
@@ -60,6 +61,7 @@ pub struct ParetoSolution(pub [f64; 5], pub [f64; 2]);
 pub struct TuningResult {
     pub solutions: Vec<ParetoSolution>,
     pub evaluations: u32,
+    pub required_labels: usize,
 }
 
 #[derive(Debug)]
@@ -100,8 +102,29 @@ pub fn tune_chebyshev(
     config: TuningConfig,
 ) -> Result<TuningResult, Box<dyn Error>> {
     validate_config(&config)?;
-    let has_labels = !config.labels.is_empty();
-    let problem = create_problem(observations, &config)?;
+    let country_code = if config.labels.is_empty() {
+        None
+    } else {
+        observation_country_code(observations)?
+    };
+    if country_code.is_none()
+        && config
+            .labels
+            .iter()
+            .any(|label| label.scope == crate::LabelScope::Country && label.country_code.is_some())
+    {
+        return Err(
+            "the input series must identify its country when labels contain country codes".into(),
+        );
+    }
+    let required_labels = required_labels_for_series(
+        observations,
+        &config.labels,
+        country_code,
+        config.proximity_days,
+    );
+    let required_label_count = required_labels.len();
+    let problem = create_problem(observations, &config, &required_labels)?;
     let options = NSGA2Arg {
         number_of_individuals: config.population_size,
         stopping_condition: StoppingCondition::MaxFunctionEvaluations(config.evaluations),
@@ -130,13 +153,14 @@ pub fn tune_chebyshev(
         .collect::<Result<Vec<_>, _>>()?;
     solutions.sort_unstable_by(compare_solutions);
     solutions.dedup();
-    if has_labels && solutions.is_empty() {
+    if required_label_count > 0 && solutions.is_empty() {
         return Err("tuning found no parameter set that detects every label".into());
     }
 
     Ok(TuningResult {
         solutions,
         evaluations: algorithm.number_of_function_evaluations(),
+        required_labels: required_label_count,
     })
 }
 
@@ -163,6 +187,7 @@ fn objectives_from_anomalies(anomalies: &[crate::Anomaly]) -> [f64; 2] {
 fn create_problem(
     observations: &[Observation],
     config: &TuningConfig,
+    required_labels: &[EventLabel],
 ) -> Result<Problem, Box<dyn Error>> {
     let objectives = vec![
         Objective::new(ANOMALY_COUNT, ObjectiveDirection::Minimise),
@@ -175,7 +200,7 @@ fn create_problem(
         real_variable(MIN_RESIDUAL, 1.0, 100.0)?,
         real_variable(EFFICIENCY, 0.01, 0.1)?,
     ];
-    let constraints = (!config.labels.is_empty()).then(|| {
+    let constraints = (!required_labels.is_empty()).then(|| {
         vec![Constraint::new(
             MISSED_LABELS,
             RelationalOperator::EqualTo,
@@ -188,10 +213,53 @@ fn create_problem(
         constraints,
         Box::new(ChebyshevEvaluator {
             observations: Arc::from(observations),
-            labels: Arc::from(config.labels.as_slice()),
+            labels: Arc::from(required_labels),
             proximity_days: config.proximity_days,
         }),
     )?)
+}
+
+fn observation_country_code(observations: &[Observation]) -> Result<Option<&str>, Box<dyn Error>> {
+    let mut country_code = None;
+    for observation in observations {
+        let Some(candidate) = observation.country.as_deref() else {
+            continue;
+        };
+        if country_code.is_some_and(|country: &str| !country.eq_ignore_ascii_case(candidate)) {
+            return Err("label-constrained tuning requires a single-country time series".into());
+        }
+        country_code = Some(candidate);
+    }
+    Ok(country_code)
+}
+
+fn required_labels_for_series(
+    observations: &[Observation],
+    labels: &[EventLabel],
+    country_code: Option<&str>,
+    proximity_days: u32,
+) -> Vec<EventLabel> {
+    let Some(first_date) = observations
+        .iter()
+        .map(|observation| observation.date)
+        .min()
+    else {
+        return Vec::new();
+    };
+    let last_date = observations
+        .iter()
+        .map(|observation| observation.date)
+        .max()
+        .expect("a minimum date implies a maximum date");
+    let proximity_days = i64::from(proximity_days);
+
+    required_country_labels(labels, country_code)
+        .into_iter()
+        .filter(|label| {
+            label.date.signed_duration_since(first_date).num_days() >= -proximity_days
+                && label.date.signed_duration_since(last_date).num_days() <= proximity_days
+        })
+        .collect()
 }
 
 fn real_variable(name: &str, minimum: f64, maximum: f64) -> Result<VariableType, Box<dyn Error>> {
@@ -273,6 +341,13 @@ mod tests {
             .collect()
     }
 
+    fn with_country(mut observations: Vec<Observation>, country: &str) -> Vec<Observation> {
+        for observation in &mut observations {
+            observation.country = Some(country.to_owned());
+        }
+        observations
+    }
+
     #[test]
     fn evaluates_the_same_objectives_as_direct_detection() {
         let series = observations(&[
@@ -342,11 +417,10 @@ mod tests {
                 evaluations: 4,
                 population_size: 4,
                 parallel: false,
-                labels: vec![EventLabel {
-                    date: NaiveDate::from_ymd_opt(2025, 2, 1).unwrap(),
-                    scope: crate::LabelScope::Country,
-                    description: None,
-                }],
+                labels: vec![EventLabel::new(
+                    NaiveDate::from_ymd_opt(2025, 2, 1).unwrap(),
+                    crate::LabelScope::Country,
+                )],
                 ..TuningConfig::default()
             },
         )
@@ -366,11 +440,10 @@ mod tests {
                 evaluations: 4,
                 population_size: 4,
                 parallel: false,
-                labels: vec![EventLabel {
-                    date: NaiveDate::from_ymd_opt(2025, 4, 1).unwrap(),
-                    scope: crate::LabelScope::Country,
-                    description: None,
-                }],
+                labels: vec![EventLabel::new(
+                    NaiveDate::from_ymd_opt(2025, 4, 1).unwrap(),
+                    crate::LabelScope::Country,
+                )],
                 ..TuningConfig::default()
             },
         )
@@ -382,11 +455,10 @@ mod tests {
             let detection = ChebyshevDetector::new(parameters).detect(&series);
             assert_eq!(
                 label_coverage(
-                    &[EventLabel {
-                        date: NaiveDate::from_ymd_opt(2025, 4, 1).unwrap(),
-                        scope: crate::LabelScope::Country,
-                        description: None,
-                    }],
+                    &[EventLabel::new(
+                        NaiveDate::from_ymd_opt(2025, 4, 1).unwrap(),
+                        crate::LabelScope::Country,
+                    )],
                     &detection.anomalies,
                     3,
                 )
@@ -394,5 +466,121 @@ mod tests {
                 0
             );
         }
+    }
+
+    #[test]
+    fn global_labels_do_not_constrain_tuning() {
+        let series = with_country(observations(&vec![10.0; 100]), "RU");
+        let result = tune_chebyshev(
+            &series,
+            TuningConfig {
+                evaluations: 4,
+                population_size: 4,
+                parallel: false,
+                labels: vec![EventLabel::new(
+                    NaiveDate::from_ymd_opt(2025, 2, 1).unwrap(),
+                    crate::LabelScope::Global,
+                )],
+                ..TuningConfig::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.required_labels, 0);
+        assert!(!result.solutions.is_empty());
+    }
+
+    #[test]
+    fn country_labels_only_constrain_the_matching_country() {
+        let series = with_country(observations(&vec![10.0; 100]), "RU");
+        let mut label = EventLabel::new(
+            NaiveDate::from_ymd_opt(2025, 2, 1).unwrap(),
+            crate::LabelScope::Country,
+        );
+        label.country_code = Some("TR".to_owned());
+        let result = tune_chebyshev(
+            &series,
+            TuningConfig {
+                evaluations: 4,
+                population_size: 4,
+                parallel: false,
+                labels: vec![label],
+                ..TuningConfig::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.required_labels, 0);
+    }
+
+    #[test]
+    fn country_labels_outside_the_series_do_not_constrain_tuning() {
+        let series = with_country(observations(&vec![10.0; 100]), "RU");
+        let mut label = EventLabel::new(
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            crate::LabelScope::Country,
+        );
+        label.country_code = Some("RU".to_owned());
+        let result = tune_chebyshev(
+            &series,
+            TuningConfig {
+                evaluations: 4,
+                population_size: 4,
+                parallel: false,
+                labels: vec![label],
+                ..TuningConfig::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.required_labels, 0);
+    }
+
+    #[test]
+    fn labeled_tuning_rejects_mixed_country_series() {
+        let mut series = observations(&vec![10.0; 100]);
+        series[0].country = Some("RU".to_owned());
+        series[1].country = Some("TR".to_owned());
+
+        let error = tune_chebyshev(
+            &series,
+            TuningConfig {
+                evaluations: 4,
+                population_size: 4,
+                parallel: false,
+                labels: vec![EventLabel::new(
+                    NaiveDate::from_ymd_opt(2025, 2, 1).unwrap(),
+                    crate::LabelScope::Country,
+                )],
+                ..TuningConfig::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("single-country"));
+    }
+
+    #[test]
+    fn labeled_tuning_requires_country_metadata_for_a_unified_label_file() {
+        let series = observations(&vec![10.0; 100]);
+        let mut label = EventLabel::new(
+            NaiveDate::from_ymd_opt(2025, 2, 1).unwrap(),
+            crate::LabelScope::Country,
+        );
+        label.country_code = Some("RU".to_owned());
+
+        let error = tune_chebyshev(
+            &series,
+            TuningConfig {
+                evaluations: 4,
+                population_size: 4,
+                parallel: false,
+                labels: vec![label],
+                ..TuningConfig::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("identify its country"));
     }
 }
