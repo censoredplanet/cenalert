@@ -15,7 +15,7 @@ pub use detector::{ChebyshevDetector, Detector};
 pub use input::{parse_dashboard_json, parse_parameters_json, InputError};
 pub use labels::{
     label_coverage, match_anomaly_to_label, parse_labels_json, EventLabel, LabelCoverage,
-    LabelInputError, LabelMatch, LabelScope,
+    LabelInputError, LabelMatch, LabelMatchMode, LabelScope,
 };
 pub use model::{AnnotatedObservation, Anomaly, DetectionResult, DetectorParameters, Observation};
 pub use selection::{select_parameters, SelectionError, SelectionMethod, SelectionResult};

@@ -85,8 +85,10 @@ Country labels outside the input series' date range and proximity margin are
 also ignored, so one multi-country label file can be reused with historical
 snapshots.
 
-A label is matched when an anomaly start date is within three days before or
-after its date by default:
+Regular labels use `"match_mode": "proximity"` by default and match when an
+anomaly start date is within three days before or after the label date. Set
+`"match_mode": "exact"` for a pseudo-label that must match an anomaly beginning
+on that exact date:
 
 ```json
 [
@@ -104,6 +106,12 @@ after its date by default:
     "metadata": {
       "source": "Example source"
     }
+  },
+  {
+    "date": "2022-01-01",
+    "scope": "country",
+    "match_mode": "exact",
+    "description": "Example series-specific methodology change"
   }
 ]
 ```
@@ -113,7 +121,11 @@ after its date by default:
 for attribution; an empty list means that its affected countries are not yet
 known. Descriptions and string-valued metadata are optional. In the matching
 API, a country event is preferred when it and a global event are equally close
-to an anomaly.
+to an anomaly. A country label without `country_code`, as in the exact-match
+example, applies to any country series processed with that label file. This
+makes series-specific pseudo-label dates configurable rather than hardcoded;
+omit them when tuning data from another source. `--proximity-days` does not
+affect exact-match labels.
 
 ```bash
 cargo run --release -- \

@@ -64,7 +64,7 @@ struct TuneArgs {
     /// Optional event labels that every feasible parameter set must detect.
     #[arg(long)]
     labels: Option<PathBuf>,
-    /// Maximum distance between label and anomaly start dates.
+    /// Maximum distance for proximity labels; exact labels always require the same date.
     #[arg(long, requires = "labels")]
     proximity_days: Option<u32>,
     /// Lower bound of the Chebyshev K search range.
