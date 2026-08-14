@@ -31,13 +31,6 @@ impl LabelMatchMode {
             Self::Exact => distance_days == 0,
         }
     }
-
-    pub(crate) fn margin_days(self, proximity_days: i64) -> i64 {
-        match self {
-            Self::Proximity => proximity_days,
-            Self::Exact => 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,7 +189,9 @@ pub(crate) fn required_country_labels(
     labels
         .iter()
         .filter(|label| {
-            label.scope == LabelScope::Country && label_applies_to_country(label, country_code)
+            label.scope == LabelScope::Country
+                && label.match_mode == LabelMatchMode::Proximity
+                && label_applies_to_country(label, country_code)
         })
         .cloned()
         .collect()
@@ -366,6 +361,17 @@ mod tests {
             required_country_labels(&[ru, tr, global], Some("RU")).len(),
             1
         );
+    }
+
+    #[test]
+    fn exact_pseudo_labels_do_not_become_tuning_constraints() {
+        let regular = label("2025-01-10", LabelScope::Country);
+        let mut pseudo = label("2022-01-01", LabelScope::Country);
+        pseudo.match_mode = LabelMatchMode::Exact;
+
+        let required = required_country_labels(&[regular.clone(), pseudo], Some("RU"));
+
+        assert_eq!(required, vec![regular]);
     }
 
     #[test]

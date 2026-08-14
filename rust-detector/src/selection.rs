@@ -26,7 +26,7 @@ pub enum SelectionMethod {
 pub struct SelectionResult {
     pub parameters: [f64; 5],
     pub objective: [f64; 2],
-    pub knee: f64,
+    pub knee: Option<f64>,
     pub method: SelectionMethod,
     pub r_squared: Option<f64>,
 }
@@ -49,7 +49,7 @@ pub fn select_parameters(front: &[ParetoSolution]) -> Result<SelectionResult, Se
         return Ok(SelectionResult {
             parameters: selected.0,
             objective: selected.1,
-            knee: selected.1[0],
+            knee: None,
             method: SelectionMethod::Polynomial,
             r_squared: None,
         });
@@ -86,10 +86,11 @@ pub fn select_parameters(front: &[ParetoSolution]) -> Result<SelectionResult, Se
         ),
     )
     .map_err(|error| SelectionError(format!("could not locate Pareto knee: {error}")))?;
-    let knee = locator.knee.unwrap_or(x[0]);
-    let selected = unique
-        .iter()
-        .find(|solution| solution.1[0] == knee)
+    let knee = locator
+        .knee
+        .filter(|knee| *knee > x[0] && *knee < x[x.len() - 1]);
+    let selected = knee
+        .and_then(|knee| unique.iter().find(|solution| solution.1[0] == knee))
         .unwrap_or(&unique[0]);
 
     Ok(SelectionResult {
@@ -388,6 +389,7 @@ mod tests {
 
         assert_eq!(result.parameters, expected.0);
         assert_eq!(result.objective, expected.1);
+        assert_eq!(result.knee, None);
     }
 
     #[test]
@@ -407,5 +409,31 @@ mod tests {
 
         assert!(select_nth_from_left(&front, 0).is_err());
         assert!(select_nth_from_left(&front, 2).is_err());
+    }
+
+    #[test]
+    fn treats_a_left_endpoint_knee_as_no_knee() {
+        let objectives = [
+            [28.0, -1816.25],
+            [29.0, -1824.11],
+            [30.0, -1842.11],
+            [31.0, -1934.21],
+            [32.0, -1956.11],
+            [33.0, -1999.19],
+            [34.0, -2018.75],
+            [35.0, -2048.40],
+            [36.0, -2067.74],
+            [37.0, -2070.50],
+            [38.0, -2096.69],
+        ];
+        let front: Vec<_> = objectives
+            .into_iter()
+            .map(|objective| ParetoSolution([objective[0]; 5], objective))
+            .collect();
+
+        let selected = select_parameters(&front).unwrap();
+
+        assert_eq!(selected.knee, None);
+        assert_eq!(selected.objective, objectives[0]);
     }
 }

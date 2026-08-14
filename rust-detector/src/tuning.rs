@@ -256,9 +256,8 @@ fn required_labels_for_series(
     required_country_labels(labels, country_code)
         .into_iter()
         .filter(|label| {
-            let margin_days = label.match_mode.margin_days(proximity_days);
-            label.date.signed_duration_since(first_date).num_days() >= -margin_days
-                && label.date.signed_duration_since(last_date).num_days() <= margin_days
+            label.date.signed_duration_since(first_date).num_days() >= -proximity_days
+                && label.date.signed_duration_since(last_date).num_days() <= proximity_days
         })
         .collect()
 }
@@ -535,18 +534,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.required_labels, 0);
-    }
-
-    #[test]
-    fn exact_labels_do_not_use_the_proximity_margin_for_series_bounds() {
-        let series = with_country(observations(&vec![10.0; 100]), "RU");
-        let first_date = series.first().unwrap().date;
-        let mut label = EventLabel::new(first_date.pred_opt().unwrap(), crate::LabelScope::Country);
-        label.match_mode = crate::LabelMatchMode::Exact;
-
-        let required = required_labels_for_series(&series, &[label], Some("RU"), 3);
-
-        assert!(required.is_empty());
     }
 
     #[test]

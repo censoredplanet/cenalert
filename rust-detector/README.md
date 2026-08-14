@@ -86,9 +86,11 @@ also ignored, so one multi-country label file can be reused with historical
 snapshots.
 
 Regular labels use `"match_mode": "proximity"` by default and match when an
-anomaly start date is within three days before or after the label date. Set
-`"match_mode": "exact"` for a pseudo-label that must match an anomaly beginning
-on that exact date:
+anomaly start date is within three days before or after the label date. These
+applicable country labels constrain tuning. Set `"match_mode": "exact"` for a
+pseudo-label that attributes only an anomaly beginning on that exact date;
+pseudo-labels never constrain tuning because a methodology change is not
+necessarily detectable in every series:
 
 ```json
 [
@@ -125,7 +127,8 @@ to an anomaly. A country label without `country_code`, as in the exact-match
 example, applies to any country series processed with that label file. This
 makes series-specific pseudo-label dates configurable rather than hardcoded;
 omit them when tuning data from another source. `--proximity-days` does not
-affect exact-match labels.
+affect exact-match labels, and exact-match labels are excluded from the
+NSGA-II missed-label constraint.
 
 ```bash
 cargo run --release -- \
@@ -136,10 +139,11 @@ cargo run --release -- \
   --output /tmp/feasible-pareto-front.json
 ```
 
-The NSGA-II constraint value is the number of missed labels. Only feasible
-rank-one solutions with zero missed country labels are written. Tuning returns
-an error if it finds no feasible parameter set. Omitting `--labels` preserves
-the fully unsupervised workflow.
+The NSGA-II constraint value is the number of missed proximity-mode country
+labels. Only feasible rank-one solutions with zero missed required labels are
+written. Exact pseudo-labels and global labels do not contribute to this
+constraint. Tuning returns an error if it finds no feasible parameter set.
+Omitting `--labels` preserves the fully unsupervised workflow.
 
 ### Build a local label file
 
@@ -183,7 +187,9 @@ requirement to preserve every applicable country label infeasible.
 The `select` subcommand chooses a preferred count-versus-impact tradeoff from
 the Pareto front. It follows the Python workflow by trying the same five
 convex, decreasing curve families, falling back to a seventh-degree polynomial,
-and locating the curve's knee.
+and locating the curve's knee. An endpoint returned by Kneedle is not treated
+as a meaningful knee. If no interior knee exists, selection explicitly reports
+that condition and uses the leftmost solution as a fallback.
 
 ```bash
 cargo run --release -- \

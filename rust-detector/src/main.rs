@@ -61,10 +61,10 @@ struct TuneArgs {
     /// Evaluate each NSGA-II population sequentially.
     #[arg(long)]
     sequential: bool,
-    /// Optional event labels that every feasible parameter set must detect.
+    /// Optional labels; applicable proximity labels constrain feasible parameter sets.
     #[arg(long)]
     labels: Option<PathBuf>,
-    /// Maximum distance for proximity labels; exact labels always require the same date.
+    /// Maximum distance for constraining proximity labels and label attribution.
     #[arg(long, requires = "labels")]
     proximity_days: Option<u32>,
     /// Lower bound of the Chebyshev K search range.
@@ -129,13 +129,18 @@ fn run_selection(arguments: SelectArgs) -> Result<(), Box<dyn Error>> {
         )
     } else {
         let selected = select_parameters(&front)?;
-        (
-            selected.parameters,
+        let message = if let Some(knee) = selected.knee {
             format!(
-                "selected {}-anomaly solution at knee {} using {:?}",
-                selected.objective[0], selected.knee, selected.method
-            ),
-        )
+                "selected {}-anomaly solution at knee {knee} using {:?}",
+                selected.objective[0], selected.method
+            )
+        } else {
+            format!(
+                "no knee found; selected leftmost fallback with {} anomalies",
+                selected.objective[0]
+            )
+        };
+        (selected.parameters, message)
     };
     serde_json::to_writer_pretty(BufWriter::new(File::create(arguments.output)?), &parameters)?;
     eprintln!("{message}");
