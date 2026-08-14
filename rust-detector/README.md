@@ -192,6 +192,18 @@ cargo run --release -- \
   --output /tmp/selected-parameters.json
 ```
 
+For labeled-selection experiments, `--left-position N` selects the one-based
+`N`th unique solution from the low-anomaly end of the front instead of fitting
+and selecting its knee. For example:
+
+```bash
+cargo run --release -- \
+  select \
+  --input /path/to/pareto-front.json \
+  --output /tmp/left-3-parameters.json \
+  --left-position 3
+```
+
 The output is a five-element parameter JSON accepted directly by `detect`.
 Together, the three subcommands provide this local workflow:
 

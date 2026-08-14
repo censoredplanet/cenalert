@@ -18,7 +18,9 @@ pub use labels::{
     LabelInputError, LabelMatch, LabelMatchMode, LabelScope,
 };
 pub use model::{AnnotatedObservation, Anomaly, DetectionResult, DetectorParameters, Observation};
-pub use selection::{select_parameters, SelectionError, SelectionMethod, SelectionResult};
+pub use selection::{
+    select_nth_from_left, select_parameters, SelectionError, SelectionMethod, SelectionResult,
+};
 pub use statistics::efficiency_ratio;
 pub use tuning::{evaluate_parameters, tune_chebyshev, ParetoSolution, TuningConfig, TuningResult};
 pub use window::{DemandCategory, SlidingWindow};

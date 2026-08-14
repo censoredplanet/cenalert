@@ -43,27 +43,7 @@ impl fmt::Display for SelectionError {
 impl std::error::Error for SelectionError {}
 
 pub fn select_parameters(front: &[ParetoSolution]) -> Result<SelectionResult, SelectionError> {
-    let mut unique: Vec<ParetoSolution> = Vec::new();
-    for solution in front {
-        if !solution.1.iter().all(|value| value.is_finite())
-            || !solution.0.iter().all(|value| value.is_finite())
-        {
-            return Err(SelectionError(
-                "Pareto front contains a non-finite value".into(),
-            ));
-        }
-        if let Some(existing) = unique.iter_mut().find(|existing| existing.1 == solution.1) {
-            *existing = *solution;
-        } else if solution.1[0] > 0.0 {
-            unique.push(*solution);
-        }
-    }
-    unique.sort_by(|left, right| left.1[0].total_cmp(&right.1[0]));
-    if unique.is_empty() {
-        return Err(SelectionError(
-            "parameter selection requires a positive-anomaly Pareto point".into(),
-        ));
-    }
+    let unique = unique_detecting_solutions(front)?;
     if unique.len() == 1 {
         let selected = &unique[0];
         return Ok(SelectionResult {
@@ -119,6 +99,51 @@ pub fn select_parameters(front: &[ParetoSolution]) -> Result<SelectionResult, Se
         method,
         r_squared,
     })
+}
+
+pub fn select_nth_from_left(
+    front: &[ParetoSolution],
+    position: usize,
+) -> Result<ParetoSolution, SelectionError> {
+    if position == 0 {
+        return Err(SelectionError(
+            "left-side position must be at least 1".into(),
+        ));
+    }
+    let unique = unique_detecting_solutions(front)?;
+    unique.get(position - 1).copied().ok_or_else(|| {
+        SelectionError(format!(
+            "left-side position {position} exceeds the {} unique detecting solutions",
+            unique.len()
+        ))
+    })
+}
+
+fn unique_detecting_solutions(
+    front: &[ParetoSolution],
+) -> Result<Vec<ParetoSolution>, SelectionError> {
+    let mut unique: Vec<ParetoSolution> = Vec::new();
+    for solution in front {
+        if !solution.1.iter().all(|value| value.is_finite())
+            || !solution.0.iter().all(|value| value.is_finite())
+        {
+            return Err(SelectionError(
+                "Pareto front contains a non-finite value".into(),
+            ));
+        }
+        if let Some(existing) = unique.iter_mut().find(|existing| existing.1 == solution.1) {
+            *existing = *solution;
+        } else if solution.1[0] > 0.0 {
+            unique.push(*solution);
+        }
+    }
+    unique.sort_by(|left, right| left.1[0].total_cmp(&right.1[0]));
+    if unique.is_empty() {
+        return Err(SelectionError(
+            "parameter selection requires a positive-anomaly Pareto point".into(),
+        ));
+    }
+    Ok(unique)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -363,5 +388,24 @@ mod tests {
 
         assert_eq!(result.parameters, expected.0);
         assert_eq!(result.objective, expected.1);
+    }
+
+    #[test]
+    fn selects_a_one_based_position_from_the_left() {
+        let front = vec![
+            ParetoSolution([3.0; 5], [3.0, -30.0]),
+            ParetoSolution([1.0; 5], [1.0, -10.0]),
+            ParetoSolution([2.0; 5], [2.0, -20.0]),
+        ];
+
+        assert_eq!(select_nth_from_left(&front, 2).unwrap(), front[2]);
+    }
+
+    #[test]
+    fn left_selection_rejects_zero_and_out_of_range_positions() {
+        let front = [ParetoSolution([1.0; 5], [1.0, -10.0])];
+
+        assert!(select_nth_from_left(&front, 0).is_err());
+        assert!(select_nth_from_left(&front, 2).is_err());
     }
 }

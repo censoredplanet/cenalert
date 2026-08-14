@@ -4,9 +4,9 @@ use std::io::{self, BufWriter};
 use std::path::PathBuf;
 
 use cenalert_detector::{
-    parse_dashboard_json, parse_labels_json, parse_parameters_json, select_parameters,
-    tune_chebyshev, Anomaly, ChebyshevDetector, Detector, DetectorParameters, ParetoSolution,
-    TuningConfig,
+    parse_dashboard_json, parse_labels_json, parse_parameters_json, select_nth_from_left,
+    select_parameters, tune_chebyshev, Anomaly, ChebyshevDetector, Detector, DetectorParameters,
+    ParetoSolution, TuningConfig,
 };
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
@@ -83,6 +83,9 @@ struct SelectArgs {
     /// Destination for the selected five-element parameter JSON.
     #[arg(long)]
     output: PathBuf,
+    /// Select the one-based nth unique solution from the low-anomaly end instead of the knee.
+    #[arg(long)]
+    left_position: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -115,15 +118,27 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 
 fn run_selection(arguments: SelectArgs) -> Result<(), Box<dyn Error>> {
     let front: Vec<ParetoSolution> = serde_json::from_reader(File::open(arguments.input)?)?;
-    let selected = select_parameters(&front)?;
-    serde_json::to_writer_pretty(
-        BufWriter::new(File::create(arguments.output)?),
-        &selected.parameters,
-    )?;
-    eprintln!(
-        "selected {}-anomaly solution at knee {} using {:?}",
-        selected.objective[0], selected.knee, selected.method
-    );
+    let (parameters, message) = if let Some(position) = arguments.left_position {
+        let selected = select_nth_from_left(&front, position)?;
+        (
+            selected.0,
+            format!(
+                "selected left-side position {position} with {} anomalies",
+                selected.1[0]
+            ),
+        )
+    } else {
+        let selected = select_parameters(&front)?;
+        (
+            selected.parameters,
+            format!(
+                "selected {}-anomaly solution at knee {} using {:?}",
+                selected.objective[0], selected.knee, selected.method
+            ),
+        )
+    };
+    serde_json::to_writer_pretty(BufWriter::new(File::create(arguments.output)?), &parameters)?;
+    eprintln!("{message}");
     Ok(())
 }
 
@@ -306,5 +321,25 @@ mod tests {
         .unwrap();
 
         assert!(matches!(parsed.command, Command::Select(_)));
+    }
+
+    #[test]
+    fn parses_left_side_selection() {
+        let parsed = Cli::try_parse_from([
+            "cenalert-detector",
+            "select",
+            "--input",
+            "front.json",
+            "--output",
+            "selected.json",
+            "--left-position",
+            "3",
+        ])
+        .unwrap();
+        let Command::Select(arguments) = parsed.command else {
+            panic!("expected select command");
+        };
+
+        assert_eq!(arguments.left_position, Some(3));
     }
 }
