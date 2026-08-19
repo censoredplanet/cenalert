@@ -18,10 +18,12 @@ The current implementation includes:
 - SciPy-compatible Shapiro-Wilk normality decisions;
 - Chebyshev/Z-score calculation;
 - the fixed-alpha Croston SBA forecast used by StatsForecast 2.0.1;
+- an `isotree`-compatible one-dimensional Isolation Forest scorer;
 - a scikit-learn-compatible one-dimensional Local Outlier Factor scorer;
-- standalone Chebyshev and Local Outlier Factor detectors behind a common
-  `Detector` trait for future standalone detectors and
-  ensemble detectors;
+- standalone Chebyshev, Isolation Forest, and Local Outlier Factor detectors
+  behind a common `Detector` trait;
+- a three-detector majority-vote ensemble with a shared window, Croston
+  configuration, minimum residual, and efficiency threshold;
 - the production anomaly state machine and window feedback behavior;
 - anomaly interval and metadata output;
 - parallel NSGA-II parameter tuning;
@@ -59,12 +61,51 @@ cargo run --release -- \
   --parameters /path/to/lof-parameters.json
 ```
 
-The deployment snapshot computes inverse-score thresholds for every LOF point,
+Isolation Forest uses the same four-element order:
+
+```bash
+cargo run --release -- \
+  detect \
+  --algorithm isolation-forest \
+  --input /path/to/dashboard-export.json \
+  --parameters /path/to/isolation-forest-parameters.json
+```
+
+The deployment snapshot computes inverse-score thresholds for every outlier
+detector point,
 which passes reversed bounds to SciPy for ordinary below-mean observations and
-raises an exception. LOF validation therefore follows the runnable paper
-behavior: thresholds are material to anomaly output only when an anomaly
-begins. The Rust implementation matches the Python anomaly intervals and
-numeric metadata while avoiding that failure.
+raises an exception. Isolation Forest and LOF validation therefore follow the
+runnable paper behavior: thresholds are material to anomaly output only when
+an anomaly begins. The Rust implementation avoids that failure.
+
+The ensemble always contains all three dense detectors, so an anomaly requires
+at least two votes. Its JSON object keeps algorithm-specific score thresholds
+separate while enforcing one shared window and one shared set of sparse-series
+parameters:
+
+```json
+{
+  "window": 60,
+  "min_residual": 5,
+  "efficiency": 0.05,
+  "chebyshev_z": 4,
+  "chebyshev_k": 6,
+  "isolation_forest_min_score": 0.8,
+  "lof_min_score": 1.5
+}
+```
+
+```bash
+cargo run --release -- \
+  detect \
+  --algorithm ensemble \
+  --input /path/to/dashboard-export.json \
+  --parameters /path/to/ensemble-parameters.json
+```
+
+The ensemble's reported threshold is the minimum of its three member
+thresholds. Sparse observations use the single shared
+Croston path rather than voting three times.
 
 The command prints JSON containing the normalized input summary, detector
 parameters, scale factor, and detected anomaly intervals. Each anomaly contains
@@ -245,6 +286,7 @@ cargo check --all-targets --all-features
 cargo test --all-targets --all-features
 cargo clippy --all-targets --all-features -- -D warnings
 python3 -m py_compile scripts/build_labels.py
+python3 -m py_compile scripts/batch_parity.py
 ```
 
 ## Validation
@@ -311,6 +353,70 @@ Run the comparisons from `rust-detector/`:
 The recorded exports report `matched 25 anomalies` for Russia and
 `matched 3 anomalies` for South Sudan.
 
+Standalone Isolation Forest and LOF can be checked with the same script by
+adding `--algorithm isolation-forest` or `--algorithm lof` and supplying the
+corresponding four-element parameter file. On the current Russia export,
+Isolation Forest matches Python's anomaly count, interval dates, peaks, initial
+scores, and residuals. Four impact values differ slightly (maximum absolute
+difference approximately `0.025`) because the bounded optimizer can choose
+different points on a flat, stepwise Isolation Forest score interval.
+
+The Python validation helper also contains a direct implementation of the
+three-member reference ensemble. For the illustrative ensemble parameter object
+above, Rust and Python match all 35 Russia anomaly intervals and numeric metadata
+with an absolute tolerance of `0.03`:
+
+```bash
+.venv/bin/python scripts/compare_outputs.py \
+  --algorithm ensemble \
+  --absolute-tolerance 0.03 \
+  --input /path/to/RU-dashboard-export.json \
+  --parameters /path/to/ensemble-parameters.json \
+  --rust-binary target/release/cenalert-detector
+```
+
+### All-country parity
+
+`scripts/batch_parity.py` runs the same Python/Rust comparison across every
+country CSV in a paper series directory. It converts each CSV in a temporary
+directory, runs countries in parallel, and writes a JSON report without
+committing the source series or generated inputs:
+
+```bash
+.venv/bin/python scripts/batch_parity.py \
+  --series-directory ../../cenalert-paper/series/012t0g \
+  --chebyshev-parameters ../../cenalert-paper/parameters/chebyshev_selected \
+  --rust-binary target/release/cenalert-detector \
+  --output /tmp/cenalert-all-country-parity.json \
+  --workers 6
+```
+
+The recorded run covers all 76 paper countries. Chebyshev uses each country's
+selected paper parameters; Isolation Forest, LOF, and ensemble use the fixed
+implementation-validation parameters shown above. These fixed parameters test
+parity and are not proposed production selections.
+
+| Algorithm | Country runs | Anomaly count and dates | Metadata within configured tolerance | Impact-only differences |
+| --- | ---: | ---: | ---: | ---: |
+| Chebyshev | 72 | 72 | 72 | 0 |
+| Isolation Forest | 76 | 76 | 57 | 19 |
+| LOF | 76 | 76 | 75 | 1 |
+| Ensemble | 76 | 76 | 68 | 8 |
+
+Chebyshev skips ER, KP, LR, and ME because their all-zero series have no
+selected paper parameter file; the other three algorithms process and match
+those series with zero anomalies. Across all 300 executed country/algorithm
+runs, Rust and Python have identical anomaly counts, start dates, end dates,
+and peak dates. The 28 remaining report mismatches are impact values only:
+Isolation Forest's stepwise score can make the two bounded optimizers choose
+different, equally scoring points in a flat threshold interval. Initial score
+and residual still match.
+
+The cross-country run exposed two sparse-state edge cases that the original RU
+and SS checks did not cover: simultaneous anomaly-ending conditions and
+StatsForecast's treatment of NaNs introduced by sparse-window rescaling. Both
+are covered by regression tests.
+
 ### Runtime benchmark
 
 `scripts/benchmark.py` performs one warm-up and then reports three steady-state
@@ -354,10 +460,11 @@ cargo run --release --example in_process_benchmark -- \
 ```
 
 Profiling identified repeated Shapiro-Wilk window sorting as the largest named
-hotspot. The optimized window maintains sorted values, caches unchanged
-moments, and computes Croston SBA directly from demand arrivals. The outputs
-remain byte-for-byte equal to the initial Rust implementation for the recorded
-Russia and South Sudan exports.
+hotspot. The optimized window maintains sorted values and caches unchanged
+moments. Croston SBA reconstructs a dense series only on the sparse path to
+preserve StatsForecast edge-case behavior. The outputs remain byte-for-byte
+equal to the initial Rust implementation for the recorded Russia and South
+Sudan exports.
 
 | In-process benchmark | Initial Rust | Optimized Rust | Improvement |
 | --- | ---: | ---: | ---: |

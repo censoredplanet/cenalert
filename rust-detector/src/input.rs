@@ -6,7 +6,9 @@ use std::io::Read;
 use chrono::{DateTime, NaiveDate};
 use serde::Deserialize;
 
-use crate::model::{DetectorParameters, Observation, OutlierDetectorParameters};
+use crate::model::{
+    DetectorParameters, EnsembleParameters, Observation, OutlierDetectorParameters,
+};
 
 #[derive(Debug)]
 pub enum InputError {
@@ -195,6 +197,47 @@ pub fn parse_outlier_parameters_json<R: Read>(
     })
 }
 
+/// Parses the named parameter object used by the three-detector ensemble.
+pub fn parse_ensemble_parameters_json<R: Read>(
+    reader: R,
+) -> Result<EnsembleParameters, InputError> {
+    let parameters: EnsembleParameters = serde_json::from_reader(reader)?;
+    let values = [
+        parameters.min_residual,
+        parameters.efficiency,
+        parameters.chebyshev_z,
+        parameters.chebyshev_k,
+        parameters.isolation_forest_min_score,
+        parameters.lof_min_score,
+    ];
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(InputError::InvalidParameters(
+            "all values must be finite".to_owned(),
+        ));
+    }
+    if parameters.window < 2 {
+        return Err(InputError::InvalidParameters(
+            "window must be at least 2".to_owned(),
+        ));
+    }
+    if parameters.min_residual <= 0.0
+        || parameters.chebyshev_z <= 0.0
+        || parameters.chebyshev_k <= 0.0
+        || parameters.isolation_forest_min_score <= 0.0
+        || parameters.lof_min_score <= 0.0
+    {
+        return Err(InputError::InvalidParameters(
+            "detector thresholds must be positive".to_owned(),
+        ));
+    }
+    if !(0.0..1.0).contains(&parameters.efficiency) {
+        return Err(InputError::InvalidParameters(
+            "efficiency must be in [0, 1)".to_owned(),
+        ));
+    }
+    Ok(parameters)
+}
+
 fn parse_date(value: &str) -> Result<NaiveDate, InputError> {
     NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .or_else(|_| DateTime::parse_from_rfc3339(value).map(|date_time| date_time.date_naive()))
@@ -314,5 +357,21 @@ mod tests {
         assert_eq!(parameters.min_score, 1.5);
         assert_eq!(parameters.min_residual, 5.0);
         assert_eq!(parameters.efficiency, 0.05);
+    }
+
+    #[test]
+    fn parses_ensemble_parameter_object() {
+        let input = br#"{
+            "window": 60,
+            "min_residual": 5,
+            "efficiency": 0.05,
+            "chebyshev_z": 4,
+            "chebyshev_k": 6,
+            "isolation_forest_min_score": 0.8,
+            "lof_min_score": 1.5
+        }"#;
+        let parameters = parse_ensemble_parameters_json(input.as_slice()).unwrap();
+        assert_eq!(parameters.window, 60);
+        assert_eq!(parameters.lof_min_score, 1.5);
     }
 }

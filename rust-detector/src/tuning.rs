@@ -410,13 +410,14 @@ mod tests {
 
     #[test]
     fn labeled_tuning_rejects_a_population_that_misses_every_label() {
-        let series = observations(&vec![10.0; 100]);
+        let series = observations(&vec![0.0; 100]);
         let error = tune_chebyshev(
             &series,
             TuningConfig {
                 evaluations: 4,
                 population_size: 4,
                 parallel: false,
+                seed: Some(42),
                 labels: vec![EventLabel::new(
                     NaiveDate::from_ymd_opt(2025, 2, 1).unwrap(),
                     crate::LabelScope::Country,

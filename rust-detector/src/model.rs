@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::DemandCategory;
 
@@ -31,6 +31,19 @@ pub struct OutlierDetectorParameters {
     pub min_score: f64,
     pub min_residual: f64,
     pub efficiency: f64,
+}
+
+/// Three-detector ensemble with shared time-series and Croston parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnsembleParameters {
+    pub window: usize,
+    pub min_residual: f64,
+    pub efficiency: f64,
+    pub chebyshev_z: f64,
+    pub chebyshev_k: f64,
+    pub isolation_forest_min_score: f64,
+    pub lof_min_score: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]

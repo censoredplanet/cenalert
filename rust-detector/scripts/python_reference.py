@@ -18,7 +18,56 @@ import polars as pl
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
-from lib.detection import ChebyshevInequality, LocalOutlierFactor  # noqa: E402
+from lib.detection import (  # noqa: E402
+    AnomalyDetector,
+    ChebyshevInequality,
+    IsolationForest,
+    LocalOutlierFactor,
+)
+
+
+class Ensemble(AnomalyDetector):
+    """Three-detector majority-vote reference used for parity validation."""
+
+    def __init__(self, parameters: dict[str, float]):
+        window = int(parameters["window"])
+        min_residual = float(parameters["min_residual"])
+        efficiency = float(parameters["efficiency"])
+        super().__init__(window, min_residual=min_residual, efficiency=efficiency)
+        self._min_score = 2
+        self.detectors = [
+            ChebyshevInequality(
+                window,
+                float(parameters["chebyshev_z"]),
+                float(parameters["chebyshev_k"]),
+                min_residual,
+                efficiency,
+            ),
+            IsolationForest(
+                window,
+                float(parameters["isolation_forest_min_score"]),
+                min_residual,
+                efficiency,
+            ),
+            LocalOutlierFactor(
+                window,
+                float(parameters["lof_min_score"]),
+                min_residual,
+                efficiency,
+            ),
+        ]
+
+    def score(self, value):
+        for detector in self.detectors:
+            detector._window = self._window
+        scores = [detector.score(value) for detector in self.detectors]
+        return sum(
+            score >= detector._min_score
+            for score, detector in zip(scores, self.detectors)
+        )
+
+    def threshold(self, initial_guess):
+        return min(detector.threshold(initial_guess) for detector in self.detectors)
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -26,7 +75,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--parameters", required=True, type=Path)
     parser.add_argument(
-        "--algorithm", choices=("chebyshev", "lof"), default="chebyshev"
+        "--algorithm",
+        choices=("chebyshev", "isolation-forest", "lof", "ensemble"),
+        default="chebyshev",
     )
     return parser.parse_args()
 
@@ -45,7 +96,8 @@ def run_reference(
 ) -> list[dict[str, Any]]:
     records = json.loads(input_path.read_text())
     parameters = json.loads(parameters_path.read_text())
-    parameters[0] = round(parameters[0])
+    if algorithm != "ensemble":
+        parameters[0] = round(parameters[0])
 
     series = pl.DataFrame(
         {
@@ -58,16 +110,19 @@ def run_reference(
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        detector = (
-            ChebyshevInequality(*parameters)
-            if algorithm == "chebyshev"
-            else LocalOutlierFactor(*parameters)
-        )
-        if algorithm == "lof":
+        if algorithm == "chebyshev":
+            detector = ChebyshevInequality(*parameters)
+        elif algorithm == "isolation-forest":
+            detector = IsolationForest(*parameters)
+        elif algorithm == "lof":
+            detector = LocalOutlierFactor(*parameters)
+        else:
+            detector = Ensemble(parameters)
+        if algorithm != "chebyshev":
             # The paper implementation computes this expensive inverse-score
             # threshold only when an anomaly begins. The deployment snapshot's
             # unconditional mode passes reversed bounds to SciPy for ordinary
-            # below-mean points and cannot complete an LOF run.
+            # below-mean points and cannot complete an outlier-detector run.
             detector._always_compute_threshold = False
         detector.run(series)
         anomalies = detector.anomalies()

@@ -4,9 +4,10 @@ use std::io::{self, BufWriter};
 use std::path::PathBuf;
 
 use cenalert_detector::{
-    parse_dashboard_json, parse_labels_json, parse_outlier_parameters_json, parse_parameters_json,
-    select_nth_from_left, select_parameters, tune_chebyshev, Anomaly, ChebyshevDetector,
-    DetectionResult, Detector, LocalOutlierFactorDetector, ParetoSolution, TuningConfig,
+    parse_dashboard_json, parse_ensemble_parameters_json, parse_labels_json,
+    parse_outlier_parameters_json, parse_parameters_json, select_nth_from_left, select_parameters,
+    tune_chebyshev, Anomaly, ChebyshevDetector, DetectionResult, Detector, EnsembleDetector,
+    IsolationForestDetector, LocalOutlierFactorDetector, ParetoSolution, TuningConfig,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -33,7 +34,7 @@ struct DetectArgs {
     /// Dashboard-exported time-series JSON.
     #[arg(long)]
     input: PathBuf,
-    /// Five-element detector parameter JSON.
+    /// Algorithm-specific detector parameter JSON.
     #[arg(long)]
     parameters: PathBuf,
     /// Detection algorithm whose parameter array is supplied.
@@ -41,10 +42,12 @@ struct DetectArgs {
     algorithm: DetectionAlgorithm,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum DetectionAlgorithm {
     Chebyshev,
+    IsolationForest,
     Lof,
+    Ensemble,
 }
 
 #[derive(Debug, Args)]
@@ -170,6 +173,16 @@ fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
             let parameters = parse_outlier_parameters_json(parameter_file)?;
             let result = LocalOutlierFactorDetector::new(parameters).detect(&observations);
             write_detection_output("lof", &observations, parameters, result)
+        }
+        DetectionAlgorithm::IsolationForest => {
+            let parameters = parse_outlier_parameters_json(parameter_file)?;
+            let result = IsolationForestDetector::new(parameters).detect(&observations);
+            write_detection_output("isolation-forest", &observations, parameters, result)
+        }
+        DetectionAlgorithm::Ensemble => {
+            let parameters = parse_ensemble_parameters_json(parameter_file)?;
+            let result = EnsembleDetector::new(parameters).detect(&observations);
+            write_detection_output("ensemble", &observations, parameters, result)
         }
     }
 }
@@ -323,6 +336,30 @@ mod tests {
         };
 
         assert!(matches!(arguments.algorithm, DetectionAlgorithm::Lof));
+    }
+
+    #[test]
+    fn parses_isolation_forest_and_ensemble_detection() {
+        for (name, expected) in [
+            ("isolation-forest", DetectionAlgorithm::IsolationForest),
+            ("ensemble", DetectionAlgorithm::Ensemble),
+        ] {
+            let parsed = Cli::try_parse_from([
+                "cenalert-detector",
+                "detect",
+                "--input",
+                "series.json",
+                "--parameters",
+                "parameters.json",
+                "--algorithm",
+                name,
+            ])
+            .unwrap();
+            let Command::Detect(arguments) = parsed.command else {
+                panic!("expected detect command");
+            };
+            assert_eq!(arguments.algorithm, expected);
+        }
     }
 
     #[test]

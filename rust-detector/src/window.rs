@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use serde::Serialize;
 
-use crate::croston::croston_sba_forecast_from_arrivals;
+use crate::croston::croston_sba_forecast;
 use crate::statistics::{mean, population_std, winsorize_upper_five_percent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -180,10 +180,7 @@ impl SlidingWindow {
     }
 
     pub(crate) fn croston_sba_forecast(&self) -> f64 {
-        croston_sba_forecast_from_arrivals(
-            self.values.iter().copied(),
-            self.interarrivals.iter().copied(),
-        )
+        croston_sba_forecast(&self.to_dense_array())
     }
 
     pub fn winsorize_upper_five_percent(&mut self) {

@@ -18,7 +18,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--parameters", required=True, type=Path)
     parser.add_argument("--rust-binary", required=True, type=Path)
     parser.add_argument(
-        "--algorithm", choices=("chebyshev", "lof"), default="chebyshev"
+        "--algorithm",
+        choices=("chebyshev", "isolation-forest", "lof", "ensemble"),
+        default="chebyshev",
     )
     parser.add_argument("--relative-tolerance", type=float, default=1e-8)
     parser.add_argument("--absolute-tolerance", type=float, default=1e-8)

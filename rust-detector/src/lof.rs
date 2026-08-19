@@ -102,9 +102,9 @@ fn nearest_neighbors(samples: &[f64], index: usize, count: usize) -> Vec<usize> 
         .collect()
 }
 
-struct LocalOutlierFactorScorer {
-    window: usize,
-    minimum_score: f64,
+pub(crate) struct LocalOutlierFactorScorer {
+    pub window: usize,
+    pub minimum_score: f64,
 }
 
 impl DenseScorer for LocalOutlierFactorScorer {
@@ -115,22 +115,29 @@ impl DenseScorer for LocalOutlierFactorScorer {
     fn evaluate(&mut self, window: &mut SlidingWindow, value: f64) -> DenseEvaluation {
         let values = window.values();
         let score = local_outlier_factor_score(&values, value, self.window);
-        let mean = window.mean();
-        let threshold = bounded_threshold(
-            mean,
-            value,
-            |candidate| local_outlier_factor_score(&values, candidate, self.window),
-            self.minimum_score,
-        );
         DenseEvaluation {
             score,
             minimum_score: self.minimum_score,
-            threshold,
         }
+    }
+
+    fn threshold(&mut self, window: &mut SlidingWindow, value: f64) -> f64 {
+        let values = window.values();
+        bounded_threshold(
+            window.mean(),
+            value,
+            |candidate| local_outlier_factor_score(&values, candidate, self.window),
+            self.minimum_score,
+        )
     }
 }
 
-fn bounded_threshold(lower: f64, upper: f64, score: impl Fn(f64) -> f64, target_score: f64) -> f64 {
+pub(crate) fn bounded_threshold(
+    lower: f64,
+    upper: f64,
+    score: impl Fn(f64) -> f64,
+    target_score: f64,
+) -> f64 {
     if !lower.is_finite() || !upper.is_finite() || upper <= lower {
         return lower;
     }
