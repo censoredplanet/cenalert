@@ -6,7 +6,7 @@ use std::io::Read;
 use chrono::{DateTime, NaiveDate};
 use serde::Deserialize;
 
-use crate::model::{DetectorParameters, Observation};
+use crate::model::{DetectorParameters, Observation, OutlierDetectorParameters};
 
 #[derive(Debug)]
 pub enum InputError {
@@ -155,6 +155,46 @@ pub fn parse_parameters_json<R: Read>(reader: R) -> Result<DetectorParameters, I
     })
 }
 
+/// Parses paper-compatible `[window, min_score, min_residual, efficiency]` arrays.
+pub fn parse_outlier_parameters_json<R: Read>(
+    reader: R,
+) -> Result<OutlierDetectorParameters, InputError> {
+    let values: Vec<f64> = serde_json::from_reader(reader)?;
+    if values.len() != 4 {
+        return Err(InputError::InvalidParameters(format!(
+            "expected 4 values, found {}",
+            values.len()
+        )));
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(InputError::InvalidParameters(
+            "all values must be finite".to_owned(),
+        ));
+    }
+    let rounded_window = values[0].round_ties_even();
+    if rounded_window < 2.0 || rounded_window > usize::MAX as f64 {
+        return Err(InputError::InvalidParameters(
+            "window must round to an integer of at least 2".to_owned(),
+        ));
+    }
+    if values[1] <= 0.0 || values[2] <= 0.0 {
+        return Err(InputError::InvalidParameters(
+            "min_score and min_residual must be positive".to_owned(),
+        ));
+    }
+    if !(0.0..1.0).contains(&values[3]) {
+        return Err(InputError::InvalidParameters(
+            "efficiency must be in [0, 1)".to_owned(),
+        ));
+    }
+    Ok(OutlierDetectorParameters {
+        window: rounded_window as usize,
+        min_score: values[1],
+        min_residual: values[2],
+        efficiency: values[3],
+    })
+}
+
 fn parse_date(value: &str) -> Result<NaiveDate, InputError> {
     NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .or_else(|_| DateTime::parse_from_rfc3339(value).map(|date_time| date_time.date_naive()))
@@ -263,5 +303,16 @@ mod tests {
 
         let error = parse_parameters_json(input.as_slice()).unwrap_err();
         assert!(matches!(error, InputError::InvalidParameters(_)));
+    }
+
+    #[test]
+    fn parses_outlier_parameter_array() {
+        let parameters =
+            parse_outlier_parameters_json(br#"[60.5, 1.5, 5, 0.05]"#.as_slice()).unwrap();
+
+        assert_eq!(parameters.window, 60);
+        assert_eq!(parameters.min_score, 1.5);
+        assert_eq!(parameters.min_residual, 5.0);
+        assert_eq!(parameters.efficiency, 0.05);
     }
 }

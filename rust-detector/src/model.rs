@@ -24,6 +24,15 @@ pub struct DetectorParameters {
     pub efficiency: f64,
 }
 
+/// Parameters shared by Isolation Forest and Local Outlier Factor detectors.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct OutlierDetectorParameters {
+    pub window: usize,
+    pub min_score: f64,
+    pub min_residual: f64,
+    pub efficiency: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnnotatedObservation {
     pub date: NaiveDate,

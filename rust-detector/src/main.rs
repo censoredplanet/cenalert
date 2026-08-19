@@ -4,11 +4,11 @@ use std::io::{self, BufWriter};
 use std::path::PathBuf;
 
 use cenalert_detector::{
-    parse_dashboard_json, parse_labels_json, parse_parameters_json, select_nth_from_left,
-    select_parameters, tune_chebyshev, Anomaly, ChebyshevDetector, Detector, DetectorParameters,
-    ParetoSolution, TuningConfig,
+    parse_dashboard_json, parse_labels_json, parse_outlier_parameters_json, parse_parameters_json,
+    select_nth_from_left, select_parameters, tune_chebyshev, Anomaly, ChebyshevDetector,
+    DetectionResult, Detector, LocalOutlierFactorDetector, ParetoSolution, TuningConfig,
 };
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 #[derive(Debug, Parser)]
@@ -36,6 +36,15 @@ struct DetectArgs {
     /// Five-element detector parameter JSON.
     #[arg(long)]
     parameters: PathBuf,
+    /// Detection algorithm whose parameter array is supplied.
+    #[arg(long, value_enum, default_value_t = DetectionAlgorithm::Chebyshev)]
+    algorithm: DetectionAlgorithm,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DetectionAlgorithm {
+    Chebyshev,
+    Lof,
 }
 
 #[derive(Debug, Args)]
@@ -89,14 +98,14 @@ struct SelectArgs {
 }
 
 #[derive(Debug, Serialize)]
-struct DetectorOutput {
+struct DetectorOutput<P> {
     algorithm: &'static str,
     observation_count: usize,
     first_date: String,
     last_date: String,
     countries: Vec<String>,
     topics: Vec<String>,
-    parameters: DetectorParameters,
+    parameters: P,
     scale_factor: f64,
     anomalies: Vec<Anomaly>,
 }
@@ -149,8 +158,28 @@ fn run_selection(arguments: SelectArgs) -> Result<(), Box<dyn Error>> {
 
 fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
     let observations = parse_dashboard_json(File::open(arguments.input)?)?;
-    let parameters = parse_parameters_json(File::open(arguments.parameters)?)?;
+    let parameter_file = File::open(arguments.parameters)?;
 
+    match arguments.algorithm {
+        DetectionAlgorithm::Chebyshev => {
+            let parameters = parse_parameters_json(parameter_file)?;
+            let result = ChebyshevDetector::new(parameters).detect(&observations);
+            write_detection_output("chebyshev", &observations, parameters, result)
+        }
+        DetectionAlgorithm::Lof => {
+            let parameters = parse_outlier_parameters_json(parameter_file)?;
+            let result = LocalOutlierFactorDetector::new(parameters).detect(&observations);
+            write_detection_output("lof", &observations, parameters, result)
+        }
+    }
+}
+
+fn write_detection_output<P: Serialize>(
+    algorithm: &'static str,
+    observations: &[cenalert_detector::Observation],
+    parameters: P,
+    result: DetectionResult,
+) -> Result<(), Box<dyn Error>> {
     let mut countries: Vec<String> = observations
         .iter()
         .filter_map(|observation| observation.country.clone())
@@ -165,9 +194,8 @@ fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
     topics.sort_unstable();
     topics.dedup();
 
-    let result = ChebyshevDetector::new(parameters).detect(&observations);
     let output = DetectorOutput {
-        algorithm: "chebyshev",
+        algorithm,
         observation_count: observations.len(),
         first_date: observations
             .first()
@@ -271,7 +299,30 @@ mod tests {
         ])
         .unwrap();
 
-        assert!(matches!(parsed.command, Command::Detect(_)));
+        let Command::Detect(arguments) = parsed.command else {
+            panic!("expected detect command");
+        };
+        assert!(matches!(arguments.algorithm, DetectionAlgorithm::Chebyshev));
+    }
+
+    #[test]
+    fn parses_lof_detection() {
+        let parsed = Cli::try_parse_from([
+            "cenalert-detector",
+            "detect",
+            "--input",
+            "series.json",
+            "--parameters",
+            "LOF.json",
+            "--algorithm",
+            "lof",
+        ])
+        .unwrap();
+        let Command::Detect(arguments) = parsed.command else {
+            panic!("expected detect command");
+        };
+
+        assert!(matches!(arguments.algorithm, DetectionAlgorithm::Lof));
     }
 
     #[test]

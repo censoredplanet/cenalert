@@ -17,6 +17,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--parameters", required=True, type=Path)
     parser.add_argument("--rust-binary", required=True, type=Path)
+    parser.add_argument(
+        "--algorithm", choices=("chebyshev", "lof"), default="chebyshev"
+    )
     parser.add_argument("--relative-tolerance", type=float, default=1e-8)
     parser.add_argument("--absolute-tolerance", type=float, default=1e-8)
     return parser.parse_args()
@@ -43,13 +46,15 @@ def main() -> None:
             arguments.input,
             "--parameters",
             arguments.parameters,
+            "--algorithm",
+            arguments.algorithm,
         ],
         check=True,
         capture_output=True,
         text=True,
     )
     rust = json.loads(completed.stdout)["anomalies"]
-    python = run_reference(arguments.input, arguments.parameters)
+    python = run_reference(arguments.input, arguments.parameters, arguments.algorithm)
 
     errors: list[str] = []
     if len(rust) != len(python):

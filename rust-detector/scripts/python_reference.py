@@ -18,13 +18,16 @@ import polars as pl
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
-from lib.detection import ChebyshevInequality  # noqa: E402
+from lib.detection import ChebyshevInequality, LocalOutlierFactor  # noqa: E402
 
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--parameters", required=True, type=Path)
+    parser.add_argument(
+        "--algorithm", choices=("chebyshev", "lof"), default="chebyshev"
+    )
     return parser.parse_args()
 
 
@@ -37,7 +40,9 @@ def json_number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def run_reference(input_path: Path, parameters_path: Path) -> list[dict[str, Any]]:
+def run_reference(
+    input_path: Path, parameters_path: Path, algorithm: str = "chebyshev"
+) -> list[dict[str, Any]]:
     records = json.loads(input_path.read_text())
     parameters = json.loads(parameters_path.read_text())
     parameters[0] = round(parameters[0])
@@ -53,7 +58,17 @@ def run_reference(input_path: Path, parameters_path: Path) -> list[dict[str, Any
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        detector = ChebyshevInequality(*parameters)
+        detector = (
+            ChebyshevInequality(*parameters)
+            if algorithm == "chebyshev"
+            else LocalOutlierFactor(*parameters)
+        )
+        if algorithm == "lof":
+            # The paper implementation computes this expensive inverse-score
+            # threshold only when an anomaly begins. The deployment snapshot's
+            # unconditional mode passes reversed bounds to SciPy for ordinary
+            # below-mean points and cannot complete an LOF run.
+            detector._always_compute_threshold = False
         detector.run(series)
         anomalies = detector.anomalies()
 
@@ -72,7 +87,7 @@ def run_reference(input_path: Path, parameters_path: Path) -> list[dict[str, Any
 
 def main() -> None:
     arguments = parse_arguments()
-    output = run_reference(arguments.input, arguments.parameters)
+    output = run_reference(arguments.input, arguments.parameters, arguments.algorithm)
     json.dump({"anomalies": output}, sys.stdout, indent=2)
     print()
 

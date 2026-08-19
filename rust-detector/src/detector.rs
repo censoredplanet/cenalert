@@ -10,6 +10,20 @@ pub trait Detector {
     fn detect(&self, observations: &[Observation]) -> DetectionResult;
 }
 
+pub(crate) struct DenseEvaluation {
+    pub score: f64,
+    pub minimum_score: f64,
+    pub threshold: f64,
+}
+
+pub(crate) trait DenseScorer {
+    fn initial_minimum_score(&self) -> f64;
+    fn evaluate(&mut self, window: &mut SlidingWindow, value: f64) -> DenseEvaluation;
+    fn idle_threshold(&mut self, _window: &mut SlidingWindow) -> Option<f64> {
+        None
+    }
+}
+
 pub struct ChebyshevDetector {
     parameters: DetectorParameters,
 }
@@ -22,46 +36,112 @@ impl ChebyshevDetector {
 
 impl Detector for ChebyshevDetector {
     fn detect(&self, observations: &[Observation]) -> DetectionResult {
-        let mut state = DetectorState::new(self.parameters);
-        let mut annotated: Vec<AnnotatedObservation> =
-            observations.iter().map(AnnotatedObservation::new).collect();
+        run_detector(
+            observations,
+            self.parameters.window,
+            self.parameters.min_residual,
+            self.parameters.efficiency,
+            ChebyshevScorer::new(self.parameters),
+        )
+    }
+}
 
-        for (index, observation) in observations.iter().enumerate() {
-            state.process(index, observation.value, &mut annotated);
-        }
+struct ChebyshevScorer {
+    z: f64,
+    k: f64,
+    minimum_score: f64,
+    shapiro_workspace: Vec<f64>,
+}
 
-        let scale_factor = normalize(&mut annotated);
-        let anomalies = collect_anomalies(&annotated);
-        DetectionResult {
-            annotated,
-            anomalies,
-            scale_factor,
+impl ChebyshevScorer {
+    fn new(parameters: DetectorParameters) -> Self {
+        Self {
+            z: parameters.z,
+            k: parameters.k,
+            minimum_score: f64::INFINITY,
+            shapiro_workspace: Vec::with_capacity(parameters.window),
         }
     }
 }
 
-struct DetectorState {
-    parameters: DetectorParameters,
+impl DenseScorer for ChebyshevScorer {
+    fn initial_minimum_score(&self) -> f64 {
+        f64::INFINITY
+    }
+
+    fn evaluate(&mut self, window: &mut SlidingWindow, value: f64) -> DenseEvaluation {
+        let moments = (window.mean(), window.std());
+        let result = chebyshev_score_from_sorted(
+            window.sorted_values(),
+            window.shapiro_shift(),
+            &mut self.shapiro_workspace,
+            value,
+            self.z,
+            self.k,
+            moments,
+        );
+        self.minimum_score = result.minimum_score;
+        DenseEvaluation {
+            score: result.score,
+            minimum_score: result.minimum_score,
+            threshold: result.threshold,
+        }
+    }
+
+    fn idle_threshold(&mut self, window: &mut SlidingWindow) -> Option<f64> {
+        Some(window.mean() + self.minimum_score * window.std())
+    }
+}
+
+pub(crate) fn run_detector<S: DenseScorer>(
+    observations: &[Observation],
+    window: usize,
+    min_residual: f64,
+    efficiency: f64,
+    scorer: S,
+) -> DetectionResult {
+    let mut state = DetectorState::new(window, min_residual, efficiency, scorer);
+    let mut annotated: Vec<AnnotatedObservation> =
+        observations.iter().map(AnnotatedObservation::new).collect();
+
+    for (index, observation) in observations.iter().enumerate() {
+        state.process(index, observation.value, &mut annotated);
+    }
+
+    let scale_factor = normalize(&mut annotated);
+    let anomalies = collect_anomalies(&annotated);
+    DetectionResult {
+        annotated,
+        anomalies,
+        scale_factor,
+    }
+}
+
+struct DetectorState<S> {
+    min_residual: f64,
+    efficiency: f64,
+    scorer: S,
     window: SlidingWindow,
     active_anomaly: bool,
     intermittent_anomaly: bool,
     efficiency_values: Vec<f64>,
     croston_forecast: Option<f64>,
     minimum_score: f64,
-    shapiro_workspace: Vec<f64>,
 }
 
-impl DetectorState {
-    fn new(parameters: DetectorParameters) -> Self {
+impl<S: DenseScorer> DetectorState<S> {
+    fn new(window: usize, min_residual: f64, efficiency: f64, scorer: S) -> Self {
+        let minimum_score = scorer.initial_minimum_score();
         Self {
-            parameters,
-            window: SlidingWindow::new(parameters.window),
+            min_residual,
+            efficiency,
+            scorer,
+            window: SlidingWindow::new(window),
             active_anomaly: false,
             intermittent_anomaly: false,
             efficiency_values: Vec::new(),
             croston_forecast: None,
-            minimum_score: f64::INFINITY,
-            shapiro_workspace: Vec::with_capacity(parameters.window),
+            minimum_score,
         }
     }
 
@@ -113,29 +193,18 @@ impl DetectorState {
             if previous_category.is_some_and(is_sparse) {
                 self.window.winsorize_upper_five_percent();
             }
-            let moments = (self.window.mean(), self.window.std());
-            let result = chebyshev_score_from_sorted(
-                self.window.sorted_values(),
-                self.window.shapiro_shift(),
-                &mut self.shapiro_workspace,
-                value,
-                self.parameters.z,
-                self.parameters.k,
-                moments,
-            );
+            let result = self.scorer.evaluate(&mut self.window, value);
             score = result.score;
             self.minimum_score = result.minimum_score;
             dense_threshold = Some(result.threshold);
         }
 
-        let new_anomaly = !self.active_anomaly
-            && (score >= self.minimum_score || residual >= self.parameters.min_residual);
+        let new_anomaly =
+            !self.active_anomaly && (score >= self.minimum_score || residual >= self.min_residual);
         let return_to_normal = self.active_anomaly
-            && (score < self.minimum_score
-                || residual < self.parameters.min_residual
-                || value.abs() <= 1e-8);
-        let new_normal = self.active_anomaly
-            && efficiency_ratio(&self.efficiency_values) < self.parameters.efficiency;
+            && (score < self.minimum_score || residual < self.min_residual || value.abs() <= 1e-8);
+        let new_normal =
+            self.active_anomaly && efficiency_ratio(&self.efficiency_values) < self.efficiency;
 
         self.active_anomaly =
             (new_anomaly || self.active_anomaly) && !(return_to_normal || new_normal);
@@ -144,9 +213,9 @@ impl DetectorState {
         if new_anomaly {
             self.intermittent_anomaly = sparse;
             threshold = Some(if self.intermittent_anomaly {
-                forecast + self.parameters.min_residual
+                forecast + self.min_residual
             } else {
-                dense_threshold.unwrap_or_else(|| self.threshold())
+                dense_threshold.unwrap_or(f64::NAN)
             });
             self.efficiency_values.push(annotated[index - 1].value);
         }
@@ -164,7 +233,7 @@ impl DetectorState {
         } else if self.active_anomaly {
             previous_threshold
         } else {
-            Some(self.threshold())
+            dense_threshold.or_else(|| self.scorer.idle_threshold(&mut self.window))
         };
         let retain_demand_statistics = self.active_anomaly && !new_anomaly;
         let coefficient_of_variation_squared = if retain_demand_statistics {
@@ -192,10 +261,6 @@ impl DetectorState {
         if !self.active_anomaly && value > 0.0 {
             self.window.insert(value, index + 1);
         }
-    }
-
-    fn threshold(&mut self) -> f64 {
-        self.window.mean() + self.minimum_score * self.window.std()
     }
 
     fn finish_anomaly(&mut self, index: usize, value: f64, return_to_normal: bool) {

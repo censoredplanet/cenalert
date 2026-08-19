@@ -18,7 +18,9 @@ The current implementation includes:
 - SciPy-compatible Shapiro-Wilk normality decisions;
 - Chebyshev/Z-score calculation;
 - the fixed-alpha Croston SBA forecast used by StatsForecast 2.0.1;
-- a common `Detector` trait for Chebyshev, future standalone detectors, and
+- a scikit-learn-compatible one-dimensional Local Outlier Factor scorer;
+- standalone Chebyshev and Local Outlier Factor detectors behind a common
+  `Detector` trait for future standalone detectors and
   ensemble detectors;
 - the production anomaly state machine and window feedback behavior;
 - anomaly interval and metadata output;
@@ -45,6 +47,24 @@ cargo run --release -- \
   --input /path/to/dashboard-export.json \
   --parameters /path/to/parameters.json
 ```
+
+Local Outlier Factor uses the paper-compatible four-element parameter order
+`[window, min_score, min_residual, efficiency]`:
+
+```bash
+cargo run --release -- \
+  detect \
+  --algorithm lof \
+  --input /path/to/dashboard-export.json \
+  --parameters /path/to/lof-parameters.json
+```
+
+The deployment snapshot computes inverse-score thresholds for every LOF point,
+which passes reversed bounds to SciPy for ordinary below-mean observations and
+raises an exception. LOF validation therefore follows the runnable paper
+behavior: thresholds are material to anomaly output only when an anomaly
+begins. The Rust implementation matches the Python anomaly intervals and
+numeric metadata while avoiding that failure.
 
 The command prints JSON containing the normalized input summary, detector
 parameters, scale factor, and detected anomaly intervals. Each anomaly contains
