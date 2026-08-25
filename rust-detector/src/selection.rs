@@ -7,7 +7,8 @@ use levenberg_marquardt::{LeastSquaresProblem, LevenbergMarquardt};
 use nalgebra::{storage::Owned, DMatrix, DVector, Dyn, Matrix, Vector};
 use serde::Serialize;
 
-use crate::tuning::ParetoSolution;
+use crate::model::EnsembleParameters;
+use crate::tuning::{ensemble_parameters, EnsembleParetoSolution, ParetoSolution};
 
 const MIN_CURVE_FIT_R2: f64 = 0.95;
 
@@ -31,6 +32,15 @@ pub struct SelectionResult {
     pub r_squared: Option<f64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EnsembleSelectionResult {
+    pub parameters: EnsembleParameters,
+    pub objective: [f64; 2],
+    pub knee: Option<f64>,
+    pub method: SelectionMethod,
+    pub r_squared: Option<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectionError(String);
 
@@ -43,20 +53,87 @@ impl fmt::Display for SelectionError {
 impl std::error::Error for SelectionError {}
 
 pub fn select_parameters(front: &[ParetoSolution]) -> Result<SelectionResult, SelectionError> {
+    let selected = select_solution(front)?;
+    Ok(SelectionResult {
+        parameters: selected.solution.0,
+        objective: selected.solution.1,
+        knee: selected.knee,
+        method: selected.method,
+        r_squared: selected.r_squared,
+    })
+}
+
+pub fn select_ensemble_parameters(
+    front: &[EnsembleParetoSolution],
+) -> Result<EnsembleSelectionResult, SelectionError> {
+    let selected = select_solution(front)?;
+    Ok(EnsembleSelectionResult {
+        parameters: ensemble_parameters(selected.solution.0),
+        objective: selected.solution.1,
+        knee: selected.knee,
+        method: selected.method,
+        r_squared: selected.r_squared,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GenericSelection<S> {
+    solution: S,
+    knee: Option<f64>,
+    method: SelectionMethod,
+    r_squared: Option<f64>,
+}
+
+trait ParetoPoint: Copy {
+    fn objective(self) -> [f64; 2];
+    fn is_finite(self) -> bool;
+}
+
+impl ParetoPoint for ParetoSolution {
+    fn objective(self) -> [f64; 2] {
+        self.1
+    }
+
+    fn is_finite(self) -> bool {
+        self.0
+            .iter()
+            .chain(self.1.iter())
+            .all(|value| value.is_finite())
+    }
+}
+
+impl ParetoPoint for EnsembleParetoSolution {
+    fn objective(self) -> [f64; 2] {
+        self.1
+    }
+
+    fn is_finite(self) -> bool {
+        self.0
+            .iter()
+            .chain(self.1.iter())
+            .all(|value| value.is_finite())
+    }
+}
+
+fn select_solution<S: ParetoPoint>(front: &[S]) -> Result<GenericSelection<S>, SelectionError> {
     let unique = unique_detecting_solutions(front)?;
     if unique.len() == 1 {
-        let selected = &unique[0];
-        return Ok(SelectionResult {
-            parameters: selected.0,
-            objective: selected.1,
+        return Ok(GenericSelection {
+            solution: unique[0],
             knee: None,
             method: SelectionMethod::Polynomial,
             r_squared: None,
         });
     }
 
-    let x: Vec<f64> = unique.iter().map(|solution| solution.1[0]).collect();
-    let y: Vec<f64> = unique.iter().map(|solution| solution.1[1]).collect();
+    let x: Vec<f64> = unique
+        .iter()
+        .map(|solution| solution.objective()[0])
+        .collect();
+    let y: Vec<f64> = unique
+        .iter()
+        .map(|solution| solution.objective()[1])
+        .collect();
     let best_fit = CurveModel::ALL
         .into_iter()
         .filter_map(|model| fit_curve(model, &x, &y))
@@ -90,12 +167,16 @@ pub fn select_parameters(front: &[ParetoSolution]) -> Result<SelectionResult, Se
         .knee
         .filter(|knee| *knee > x[0] && *knee < x[x.len() - 1]);
     let selected = knee
-        .and_then(|knee| unique.iter().find(|solution| solution.1[0] == knee))
-        .unwrap_or(&unique[0]);
+        .and_then(|knee| {
+            unique
+                .iter()
+                .find(|solution| solution.objective()[0] == knee)
+        })
+        .copied()
+        .unwrap_or(unique[0]);
 
-    Ok(SelectionResult {
-        parameters: selected.0,
-        objective: selected.1,
+    Ok(GenericSelection {
+        solution: selected,
         knee,
         method,
         r_squared,
@@ -106,6 +187,17 @@ pub fn select_nth_from_left(
     front: &[ParetoSolution],
     position: usize,
 ) -> Result<ParetoSolution, SelectionError> {
+    select_nth_solution(front, position)
+}
+
+pub fn select_ensemble_nth_from_left(
+    front: &[EnsembleParetoSolution],
+    position: usize,
+) -> Result<EnsembleParetoSolution, SelectionError> {
+    select_nth_solution(front, position)
+}
+
+fn select_nth_solution<S: ParetoPoint>(front: &[S], position: usize) -> Result<S, SelectionError> {
     if position == 0 {
         return Err(SelectionError(
             "left-side position must be at least 1".into(),
@@ -120,25 +212,24 @@ pub fn select_nth_from_left(
     })
 }
 
-fn unique_detecting_solutions(
-    front: &[ParetoSolution],
-) -> Result<Vec<ParetoSolution>, SelectionError> {
-    let mut unique: Vec<ParetoSolution> = Vec::new();
+fn unique_detecting_solutions<S: ParetoPoint>(front: &[S]) -> Result<Vec<S>, SelectionError> {
+    let mut unique: Vec<S> = Vec::new();
     for solution in front {
-        if !solution.1.iter().all(|value| value.is_finite())
-            || !solution.0.iter().all(|value| value.is_finite())
-        {
+        if !solution.is_finite() {
             return Err(SelectionError(
                 "Pareto front contains a non-finite value".into(),
             ));
         }
-        if let Some(existing) = unique.iter_mut().find(|existing| existing.1 == solution.1) {
+        if let Some(existing) = unique
+            .iter_mut()
+            .find(|existing| existing.objective() == solution.objective())
+        {
             *existing = *solution;
-        } else if solution.1[0] > 0.0 {
+        } else if solution.objective()[0] > 0.0 {
             unique.push(*solution);
         }
     }
-    unique.sort_by(|left, right| left.1[0].total_cmp(&right.1[0]));
+    unique.sort_by(|left, right| left.objective()[0].total_cmp(&right.objective()[0]));
     if unique.is_empty() {
         return Err(SelectionError(
             "parameter selection requires a positive-anomaly Pareto point".into(),
@@ -374,6 +465,36 @@ mod tests {
 
         assert!(front.iter().any(|solution| solution.0 == result.parameters));
         assert!(front.iter().any(|solution| solution.1 == result.objective));
+    }
+
+    #[test]
+    fn selects_ensemble_parameters_from_the_same_objective_curve() {
+        let front = vec![
+            EnsembleParetoSolution([30.0, 1.0, 0.05, 3.0, 5.0, 0.5, 1.1], [1.0, -10.0]),
+            EnsembleParetoSolution([40.0, 2.0, 0.06, 3.5, 6.0, 0.6, 1.5], [2.0, -20.0]),
+            EnsembleParetoSolution([50.0, 3.0, 0.07, 4.0, 7.0, 0.7, 2.0], [3.0, -24.0]),
+            EnsembleParetoSolution([60.0, 4.0, 0.08, 4.5, 8.0, 0.8, 2.5], [4.0, -26.0]),
+            EnsembleParetoSolution([70.0, 5.0, 0.09, 5.0, 9.0, 0.9, 3.0], [5.0, -27.0]),
+        ];
+
+        let result = select_ensemble_parameters(&front).unwrap();
+
+        assert!(front.iter().any(|solution| {
+            ensemble_parameters(solution.0) == result.parameters && solution.1 == result.objective
+        }));
+    }
+
+    #[test]
+    fn selects_ensemble_solution_by_left_position() {
+        let front = [
+            EnsembleParetoSolution([50.0; 7], [3.0, -30.0]),
+            EnsembleParetoSolution([30.0; 7], [1.0, -10.0]),
+            EnsembleParetoSolution([40.0; 7], [2.0, -20.0]),
+        ];
+
+        let selected = select_ensemble_nth_from_left(&front, 2).unwrap();
+
+        assert_eq!(selected.1, [2.0, -20.0]);
     }
 
     #[test]

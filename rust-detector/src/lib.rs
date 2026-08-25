@@ -31,8 +31,13 @@ pub use model::{
     Observation, OutlierDetectorParameters,
 };
 pub use selection::{
-    select_nth_from_left, select_parameters, SelectionError, SelectionMethod, SelectionResult,
+    select_ensemble_nth_from_left, select_ensemble_parameters, select_nth_from_left,
+    select_parameters, EnsembleSelectionResult, SelectionError, SelectionMethod, SelectionResult,
 };
 pub use statistics::efficiency_ratio;
-pub use tuning::{evaluate_parameters, tune_chebyshev, ParetoSolution, TuningConfig, TuningResult};
+pub use tuning::{
+    ensemble_parameters, evaluate_ensemble_parameters, evaluate_parameters, tune_chebyshev,
+    tune_ensemble, EnsembleParetoSolution, EnsembleTuningResult, ParetoSolution, TuningConfig,
+    TuningResult,
+};
 pub use window::{DemandCategory, SlidingWindow};

@@ -113,10 +113,10 @@ its start, end, peak, score, residual, and impact.
 
 ## Tune parameters
 
-The `tune` subcommand reproduces the paper's Chebyshev NSGA-II search: window
-size, Z-score threshold, Chebyshev threshold, minimum residual, and efficiency
-are optimized against anomaly count and negative total impact. Candidate
-detector evaluations run in parallel through Rayon by default.
+The `tune` subcommand supports the paper's Chebyshev NSGA-II search and joint
+three-detector ensemble tuning. Candidate detector evaluations run in parallel
+through Rayon by default. Both searches minimize anomaly count and negative
+total impact.
 
 ```bash
 cargo run --release -- \
@@ -134,6 +134,32 @@ single-threaded comparison. The output uses the paper-compatible
 
 The Chebyshev K search range defaults to the paper's `5–18` range and can be
 changed for experiments with `--k-min` and `--k-max`.
+
+For the ensemble, add `--algorithm ensemble`. One seven-dimensional candidate
+jointly tunes:
+
+1. the window, minimum residual, and efficiency shared by all three members;
+2. the Chebyshev Z and K thresholds;
+3. the Isolation Forest and LOF minimum scores.
+
+The ranges come from the paper's individual detector searches. Because
+efficiency is shared, its ensemble range is the common `0.05–0.1` interval.
+
+```bash
+cargo run --release -- \
+  tune \
+  --algorithm ensemble \
+  --input /path/to/dashboard-export.json \
+  --output /tmp/ensemble-pareto-front.json \
+  --evaluations 5000 \
+  --population-size 100 \
+  --seed 42
+```
+
+Each ensemble Pareto solution has the same `[parameters, objectives]` shape as
+the Chebyshev output. Its parameter order is `window`, `min_residual`,
+`efficiency`, `chebyshev_z`, `chebyshev_k`,
+`isolation_forest_min_score`, and `lof_min_score`.
 
 ### Preserve labeled events
 
@@ -194,11 +220,14 @@ NSGA-II missed-label constraint.
 ```bash
 cargo run --release -- \
   tune \
+  --algorithm ensemble \
   --input /path/to/dashboard-export.json \
   --labels /path/to/labels.json \
   --proximity-days 3 \
-  --output /tmp/feasible-pareto-front.json
+  --output /tmp/feasible-ensemble-pareto-front.json
 ```
+
+Omit `--algorithm ensemble` to apply the same constraints to Chebyshev tuning.
 
 The NSGA-II constraint value is the number of missed proximity-mode country
 labels. Only feasible rank-one solutions with zero missed required labels are
@@ -255,13 +284,24 @@ that condition and uses the leftmost solution as a fallback.
 ```bash
 cargo run --release -- \
   select \
+  --algorithm ensemble \
+  --input /tmp/ensemble-pareto-front.json \
+  --output /tmp/selected-ensemble-parameters.json
+```
+
+For Chebyshev, omit `--algorithm ensemble`:
+
+```bash
+cargo run --release -- \
+  select \
   --input /path/to/pareto-front.json \
   --output /tmp/selected-parameters.json
 ```
 
 For labeled-selection experiments, `--left-position N` selects the one-based
 `N`th unique solution from the low-anomaly end of the front instead of fitting
-and selecting its knee. For example:
+and selecting its knee. Include `--algorithm ensemble` when the input is an
+ensemble Pareto front. For example:
 
 ```bash
 cargo run --release -- \
@@ -271,7 +311,9 @@ cargo run --release -- \
   --left-position 3
 ```
 
-The output is a five-element parameter JSON accepted directly by `detect`.
+Chebyshev selection writes the paper-compatible five-element array. Ensemble
+selection writes the named parameter object accepted by
+`detect --algorithm ensemble`.
 Together, the three subcommands provide this local workflow:
 
 ```text

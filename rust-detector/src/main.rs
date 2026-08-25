@@ -5,9 +5,11 @@ use std::path::PathBuf;
 
 use cenalert_detector::{
     parse_dashboard_json, parse_ensemble_parameters_json, parse_labels_json,
-    parse_outlier_parameters_json, parse_parameters_json, select_nth_from_left, select_parameters,
-    tune_chebyshev, Anomaly, ChebyshevDetector, DetectionResult, Detector, EnsembleDetector,
-    IsolationForestDetector, LocalOutlierFactorDetector, ParetoSolution, TuningConfig,
+    parse_outlier_parameters_json, parse_parameters_json, select_ensemble_nth_from_left,
+    select_ensemble_parameters, select_nth_from_left, select_parameters, tune_chebyshev,
+    tune_ensemble, Anomaly, ChebyshevDetector, DetectionResult, Detector, EnsembleDetector,
+    EnsembleParetoSolution, IsolationForestDetector, LocalOutlierFactorDetector, ParetoSolution,
+    TuningConfig,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -23,7 +25,7 @@ struct Cli {
 enum Command {
     /// Detect anomalies using a selected parameter set.
     Detect(DetectArgs),
-    /// Tune Chebyshev detector parameters with NSGA-II.
+    /// Tune detector parameters with NSGA-II.
     Tune(TuneArgs),
     /// Select the preferred tradeoff from an NSGA-II Pareto front.
     Select(SelectArgs),
@@ -55,6 +57,9 @@ struct TuneArgs {
     /// Dashboard-exported time-series JSON.
     #[arg(long)]
     input: PathBuf,
+    /// Detector to tune.
+    #[arg(long, value_enum, default_value_t = TuningAlgorithm::Chebyshev)]
+    algorithm: TuningAlgorithm,
     /// Destination for the Pareto-front JSON.
     #[arg(long)]
     output: PathBuf,
@@ -87,12 +92,21 @@ struct TuneArgs {
     k_max: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum TuningAlgorithm {
+    Chebyshev,
+    Ensemble,
+}
+
 #[derive(Debug, Args)]
 struct SelectArgs {
     /// Pareto-front JSON produced by the tune subcommand.
     #[arg(long)]
     input: PathBuf,
-    /// Destination for the selected five-element parameter JSON.
+    /// Detector whose Pareto front is supplied.
+    #[arg(long, value_enum, default_value_t = TuningAlgorithm::Chebyshev)]
+    algorithm: TuningAlgorithm,
+    /// Destination for the selected algorithm-specific parameter JSON.
     #[arg(long)]
     output: PathBuf,
     /// Select the one-based nth unique solution from the low-anomaly end instead of the knee.
@@ -129,34 +143,65 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 }
 
 fn run_selection(arguments: SelectArgs) -> Result<(), Box<dyn Error>> {
-    let front: Vec<ParetoSolution> = serde_json::from_reader(File::open(arguments.input)?)?;
-    let (parameters, message) = if let Some(position) = arguments.left_position {
-        let selected = select_nth_from_left(&front, position)?;
-        (
-            selected.0,
-            format!(
-                "selected left-side position {position} with {} anomalies",
-                selected.1[0]
-            ),
-        )
-    } else {
-        let selected = select_parameters(&front)?;
-        let message = if let Some(knee) = selected.knee {
-            format!(
-                "selected {}-anomaly solution at knee {knee} using {:?}",
-                selected.objective[0], selected.method
-            )
-        } else {
-            format!(
-                "no knee found; selected leftmost fallback with {} anomalies",
-                selected.objective[0]
-            )
-        };
-        (selected.parameters, message)
+    let message = match arguments.algorithm {
+        TuningAlgorithm::Chebyshev => {
+            let front: Vec<ParetoSolution> = serde_json::from_reader(File::open(arguments.input)?)?;
+            let output = BufWriter::new(File::create(arguments.output)?);
+            if let Some(position) = arguments.left_position {
+                let selected = select_nth_from_left(&front, position)?;
+                serde_json::to_writer_pretty(output, &selected.0)?;
+                left_selection_message(position, selected.1)
+            } else {
+                let selected = select_parameters(&front)?;
+                serde_json::to_writer_pretty(output, &selected.parameters)?;
+                knee_selection_message(selected.objective, selected.knee, selected.method)
+            }
+        }
+        TuningAlgorithm::Ensemble => {
+            let front: Vec<EnsembleParetoSolution> =
+                serde_json::from_reader(File::open(arguments.input)?)?;
+            let output = BufWriter::new(File::create(arguments.output)?);
+            if let Some(position) = arguments.left_position {
+                let selected = select_ensemble_nth_from_left(&front, position)?;
+                serde_json::to_writer_pretty(
+                    output,
+                    &cenalert_detector::ensemble_parameters(selected.0),
+                )?;
+                left_selection_message(position, selected.1)
+            } else {
+                let selected = select_ensemble_parameters(&front)?;
+                serde_json::to_writer_pretty(output, &selected.parameters)?;
+                knee_selection_message(selected.objective, selected.knee, selected.method)
+            }
+        }
     };
-    serde_json::to_writer_pretty(BufWriter::new(File::create(arguments.output)?), &parameters)?;
     eprintln!("{message}");
     Ok(())
+}
+
+fn left_selection_message(position: usize, objective: [f64; 2]) -> String {
+    format!(
+        "selected left-side position {position} with {} anomalies",
+        objective[0]
+    )
+}
+
+fn knee_selection_message(
+    objective: [f64; 2],
+    knee: Option<f64>,
+    method: cenalert_detector::SelectionMethod,
+) -> String {
+    if let Some(knee) = knee {
+        format!(
+            "selected {}-anomaly solution at knee {knee} using {method:?}",
+            objective[0]
+        )
+    } else {
+        format!(
+            "no knee found; selected leftmost fallback with {} anomalies",
+            objective[0]
+        )
+    }
 }
 
 fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
@@ -249,41 +294,56 @@ fn run_tuning(arguments: TuneArgs) -> Result<(), Box<dyn Error>> {
         .transpose()?
         .unwrap_or_default();
     let provided_label_count = labels.len();
-    let result = tune_chebyshev(
-        &observations,
-        TuningConfig {
-            evaluations: arguments.evaluations,
-            population_size: arguments.population_size,
-            parallel: !arguments.sequential,
-            seed: arguments.seed,
-            k_min: arguments.k_min,
-            k_max: arguments.k_max,
-            labels,
-            proximity_days: arguments.proximity_days.unwrap_or(3),
-        },
-    )?;
-    serde_json::to_writer_pretty(
-        BufWriter::new(File::create(arguments.output)?),
-        &result.solutions,
-    )?;
+    let config = TuningConfig {
+        evaluations: arguments.evaluations,
+        population_size: arguments.population_size,
+        parallel: !arguments.sequential,
+        seed: arguments.seed,
+        k_min: arguments.k_min,
+        k_max: arguments.k_max,
+        labels,
+        proximity_days: arguments.proximity_days.unwrap_or(3),
+    };
+    let (evaluations, solution_count, required_labels) = match arguments.algorithm {
+        TuningAlgorithm::Chebyshev => {
+            let result = tune_chebyshev(&observations, config)?;
+            serde_json::to_writer_pretty(
+                BufWriter::new(File::create(arguments.output)?),
+                &result.solutions,
+            )?;
+            (
+                result.evaluations,
+                result.solutions.len(),
+                result.required_labels,
+            )
+        }
+        TuningAlgorithm::Ensemble => {
+            let result = tune_ensemble(&observations, config)?;
+            serde_json::to_writer_pretty(
+                BufWriter::new(File::create(arguments.output)?),
+                &result.solutions,
+            )?;
+            (
+                result.evaluations,
+                result.solutions.len(),
+                result.required_labels,
+            )
+        }
+    };
     if provided_label_count == 0 {
         eprintln!(
             "completed {} evaluations; wrote {} Pareto solutions",
-            result.evaluations,
-            result.solutions.len()
+            evaluations, solution_count
         );
-    } else if result.required_labels == 0 {
+    } else if required_labels == 0 {
         eprintln!(
             "completed {} evaluations without applicable country-label constraints; wrote {} Pareto solutions",
-            result.evaluations,
-            result.solutions.len()
+            evaluations, solution_count
         );
     } else {
         eprintln!(
             "completed {} evaluations; wrote {} feasible Pareto solutions preserving all {} labels",
-            result.evaluations,
-            result.solutions.len(),
-            result.required_labels
+            evaluations, solution_count, required_labels
         );
     }
     Ok(())
@@ -378,12 +438,48 @@ mod tests {
         };
 
         assert_eq!(arguments.evaluations, 5_000);
+        assert_eq!(arguments.algorithm, TuningAlgorithm::Chebyshev);
         assert_eq!(arguments.population_size, 100);
         assert!(!arguments.sequential);
         assert_eq!(arguments.k_min, 5.0);
         assert_eq!(arguments.k_max, 18.0);
         assert!(arguments.labels.is_none());
         assert!(arguments.proximity_days.is_none());
+    }
+
+    #[test]
+    fn parses_ensemble_tuning_and_selection() {
+        let tuned = Cli::try_parse_from([
+            "cenalert-detector",
+            "tune",
+            "--algorithm",
+            "ensemble",
+            "--input",
+            "series.json",
+            "--output",
+            "front.json",
+        ])
+        .unwrap();
+        let Command::Tune(tune_arguments) = tuned.command else {
+            panic!("expected tune command");
+        };
+        assert_eq!(tune_arguments.algorithm, TuningAlgorithm::Ensemble);
+
+        let selected = Cli::try_parse_from([
+            "cenalert-detector",
+            "select",
+            "--algorithm",
+            "ensemble",
+            "--input",
+            "front.json",
+            "--output",
+            "selected.json",
+        ])
+        .unwrap();
+        let Command::Select(select_arguments) = selected.command else {
+            panic!("expected select command");
+        };
+        assert_eq!(select_arguments.algorithm, TuningAlgorithm::Ensemble);
     }
 
     #[test]
