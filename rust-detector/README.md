@@ -283,6 +283,7 @@ python3 scripts/build_labels.py \
   --shutdowns ../CenAlert_Shutdowns.csv \
   --other ../CenAlert_Other.csv \
   --global-events ../CenAlert_Global.csv \
+  --exclusions config/label-exclusions.csv \
   --community-events ../../cenalert-paper/events/custom/Community.csv \
   --series-directory ../../cenalert-paper/series/012t0g \
   --parameters-directory ../../cenalert-paper/parameters/chebyshev_selected \
@@ -300,6 +301,47 @@ revalidate those events against the selected time series. Before constrained
 tuning, confirm that the labels were verified against the same Google Trends
 keyword or topic as the input series. A mismatched series can make the
 requirement to preserve every applicable country label infeasible.
+
+`config/label-exclusions.csv` records label-removal decisions without changing
+the source spreadsheets. The current entries exclude six Russia events that
+were not reliably preserved within the agreed search space; one is also a
+duplicate of a global event. The exclusions affect tuning constraints, while a
+detected spike on one of those dates can still appear as an unmatched anomaly
+for later review.
+
+### Run all-country ensemble tuning
+
+`scripts/batch_ensemble_tuning.py` runs the complete constrained workflow for
+each country CSV: tune, select the knee or documented leftmost fallback, run
+detection, and compare that result with the first Pareto-front solution. For an
+infeasible country, it records labels missed by the best simultaneous-coverage
+unconstrained Pareto solution and distinguishes labels never detected by any
+diagnostic Pareto solution. It also exports anomalies that have no applicable
+country or global label.
+
+The work directory stores intermediate inputs and Pareto fronts so an
+interrupted run can continue with `--resume`. Keep it outside the repository:
+
+```bash
+.venv/bin/python scripts/batch_ensemble_tuning.py \
+  --series-directory ../../cenalert-paper/series/012t0g \
+  --labels /tmp/cenalert-labels.json \
+  --rust-binary target/release/cenalert-detector \
+  --output-directory reports/ensemble-tuning-paper-series \
+  --work-directory /tmp/cenalert-ensemble-tuning \
+  --evaluations 5000 \
+  --population-size 100 \
+  --workers 10 \
+  --threads-per-tuning 1 \
+  --seed 42
+```
+
+Use `--countries RU SS` for a smaller validation run. The Markdown report
+contains the configuration, findings, country summary, labels requiring
+review, and highest-impact unmatched anomalies. A CSV retains the complete
+unmatched-anomaly list, and a JSON file retains selected parameters. Source
+event spreadsheets and full intermediate Pareto fronts remain in their input
+and work locations.
 
 ## Select parameters
 

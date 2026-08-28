@@ -24,6 +24,11 @@ def parse_arguments() -> argparse.Namespace:
     for category in COUNTRY_SHEETS:
         parser.add_argument(f"--{category}", required=True, type=Path)
     parser.add_argument("--global-events", required=True, type=Path)
+    parser.add_argument(
+        "--exclusions",
+        type=Path,
+        help="Optional CSV of country/date/description/category labels to omit.",
+    )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--community-events", type=Path)
     parser.add_argument("--series-directory", type=Path)
@@ -209,12 +214,64 @@ def exact_deduplicate(labels: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def apply_exclusions(
+    labels: list[dict[str, Any]], exclusions_path: Path | None
+) -> tuple[list[dict[str, Any]], int]:
+    if exclusions_path is None:
+        return labels, 0
+    with exclusions_path.open(newline="", encoding="utf-8-sig") as input_file:
+        exclusions = list(csv.DictReader(input_file))
+    required = {"country_code", "start_date", "description", "category"}
+    missing = required.difference(exclusions[0] if exclusions else ())
+    if missing:
+        raise ValueError(
+            f"{exclusions_path} is missing columns: {', '.join(sorted(missing))}"
+        )
+    keys = {
+        (
+            row["country_code"].strip().upper(),
+            row["start_date"].strip(),
+            row["description"].strip(),
+            row["category"].strip(),
+        )
+        for row in exclusions
+    }
+    available = {
+        (
+            label.get("country_code", "").upper(),
+            label["date"],
+            label.get("description", ""),
+            label.get("metadata", {}).get("category", ""),
+        )
+        for label in labels
+    }
+    unmatched = keys.difference(available)
+    if unmatched:
+        raise ValueError(
+            f"{exclusions_path} contains {len(unmatched)} exclusion(s) that do not "
+            "match a generated label"
+        )
+    retained = [
+        label
+        for label in labels
+        if (
+            label.get("country_code", "").upper(),
+            label["date"],
+            label.get("description", ""),
+            label.get("metadata", {}).get("category", ""),
+        )
+        not in keys
+    ]
+    return retained, len(labels) - len(retained)
+
+
 def main() -> None:
     arguments = parse_arguments()
     labels = load_manual_labels(arguments)
     manual_count = len(labels)
     if arguments.community_events:
         labels.extend(derive_automatic_labels(arguments))
+    labels, excluded_count = apply_exclusions(labels, arguments.exclusions)
     labels = exact_deduplicate(labels)
     report_same_day_events(labels)
 
@@ -224,7 +281,7 @@ def main() -> None:
     global_count = len(labels) - country_count
     print(
         f"wrote {len(labels)} labels ({country_count} country, {global_count} global); "
-        f"loaded {manual_count} manually verified rows",
+        f"loaded {manual_count} manually verified rows; excluded {excluded_count} rows",
         file=sys.stderr,
     )
 

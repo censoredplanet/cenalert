@@ -1,0 +1,1362 @@
+{
+  "AE": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 0.007803030115393496,
+      "efficiency": 0.05915294450783049,
+      "chebyshev_z": 4.92554388819526,
+      "chebyshev_k": 5.435531588851415,
+      "isolation_forest_min_score": 0.516870898669971,
+      "lof_min_score": 4.672990432480483
+    },
+    "leftmost": {
+      "window": 88,
+      "min_residual_ratio": 0.135458831107069,
+      "efficiency": 0.058690345727704395,
+      "chebyshev_z": 4.925620906629632,
+      "chebyshev_k": 6.1352116569381145,
+      "isolation_forest_min_score": 0.5044341030769198,
+      "lof_min_score": 4.912116601884522
+    }
+  },
+  "AF": {
+    "selected": {
+      "window": 65,
+      "min_residual_ratio": 0.9293649879898768,
+      "efficiency": 0.06332940045877454,
+      "chebyshev_z": 3.2946564237201983,
+      "chebyshev_k": 8.16284730711022,
+      "isolation_forest_min_score": 0.5093599744740005,
+      "lof_min_score": 2.182584499526701
+    },
+    "leftmost": {
+      "window": 65,
+      "min_residual_ratio": 0.9293649879898768,
+      "efficiency": 0.06332940045877454,
+      "chebyshev_z": 3.2946564237201983,
+      "chebyshev_k": 8.16284730711022,
+      "isolation_forest_min_score": 0.5093599744740005,
+      "lof_min_score": 2.182584499526701
+    }
+  },
+  "AM": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 0.9502275972667428,
+      "efficiency": 0.05947220199183955,
+      "chebyshev_z": 3.0704430934201135,
+      "chebyshev_k": 17.14482550321417,
+      "isolation_forest_min_score": 0.7638963792867219,
+      "lof_min_score": 4.081316756580034
+    },
+    "leftmost": {
+      "window": 90,
+      "min_residual_ratio": 0.9502275972667428,
+      "efficiency": 0.05947220199183955,
+      "chebyshev_z": 3.0704430934201135,
+      "chebyshev_k": 17.14482550321417,
+      "isolation_forest_min_score": 0.7638963792867219,
+      "lof_min_score": 4.081316756580034
+    }
+  },
+  "AZ": {
+    "selected": {
+      "window": 31,
+      "min_residual_ratio": 0.003679454038794309,
+      "efficiency": 0.05103453451618913,
+      "chebyshev_z": 4.0864919199332945,
+      "chebyshev_k": 5.515373135870659,
+      "isolation_forest_min_score": 0.7651731068614228,
+      "lof_min_score": 3.5752132319711216
+    },
+    "leftmost": {
+      "window": 31,
+      "min_residual_ratio": 0.031816328071259344,
+      "efficiency": 0.052706564635704695,
+      "chebyshev_z": 4.085537491579051,
+      "chebyshev_k": 5.492636291928365,
+      "isolation_forest_min_score": 0.785237191105543,
+      "lof_min_score": 3.4737661936079363
+    }
+  },
+  "BD": {
+    "selected": {
+      "window": 46,
+      "min_residual_ratio": 0.005090495292335186,
+      "efficiency": 0.056536432430891174,
+      "chebyshev_z": 3.9087773680510742,
+      "chebyshev_k": 5.040332720692061,
+      "isolation_forest_min_score": 0.5446931348979696,
+      "lof_min_score": 4.984097163318225
+    },
+    "leftmost": {
+      "window": 70,
+      "min_residual_ratio": 0.006354837429670341,
+      "efficiency": 0.05539535814999362,
+      "chebyshev_z": 3.0073943819865123,
+      "chebyshev_k": 5.037212977334121,
+      "isolation_forest_min_score": 0.9974661302575252,
+      "lof_min_score": 2.085665516788034
+    }
+  },
+  "BF": {
+    "selected": {
+      "window": 62,
+      "min_residual_ratio": 0.34800976277129775,
+      "efficiency": 0.0994180500091834,
+      "chebyshev_z": 3.4060507606619237,
+      "chebyshev_k": 17.532575290687344,
+      "isolation_forest_min_score": 0.7502461163904574,
+      "lof_min_score": 1.7766823406066337
+    },
+    "leftmost": {
+      "window": 62,
+      "min_residual_ratio": 0.34800976277129775,
+      "efficiency": 0.0994180500091834,
+      "chebyshev_z": 3.4060507606619237,
+      "chebyshev_k": 17.532575290687344,
+      "isolation_forest_min_score": 0.7502461163904574,
+      "lof_min_score": 1.7766823406066337
+    }
+  },
+  "BI": {
+    "selected": {
+      "window": 60,
+      "min_residual_ratio": 0.004548766559608177,
+      "efficiency": 0.05159211867819527,
+      "chebyshev_z": 3.8881988911175345,
+      "chebyshev_k": 10.996757779873048,
+      "isolation_forest_min_score": 0.6525062595498506,
+      "lof_min_score": 4.356643379553678
+    },
+    "leftmost": {
+      "window": 60,
+      "min_residual_ratio": 0.004548766559608177,
+      "efficiency": 0.05159211867819527,
+      "chebyshev_z": 3.8881988911175345,
+      "chebyshev_k": 10.996757779873048,
+      "isolation_forest_min_score": 0.6525062595498506,
+      "lof_min_score": 4.356643379553678
+    }
+  },
+  "BJ": {
+    "selected": {
+      "window": 32,
+      "min_residual_ratio": 0.5759743536852728,
+      "efficiency": 0.09098412622413268,
+      "chebyshev_z": 4.633102804669485,
+      "chebyshev_k": 14.53166603893233,
+      "isolation_forest_min_score": 0.8056232574110744,
+      "lof_min_score": 1.903129493035316
+    },
+    "leftmost": {
+      "window": 32,
+      "min_residual_ratio": 0.5759743536852728,
+      "efficiency": 0.09098412622413268,
+      "chebyshev_z": 4.633102804669485,
+      "chebyshev_k": 14.53166603893233,
+      "isolation_forest_min_score": 0.8056232574110744,
+      "lof_min_score": 1.903129493035316
+    }
+  },
+  "BR": {
+    "selected": {
+      "window": 80,
+      "min_residual_ratio": 0.8522027787109349,
+      "efficiency": 0.05051724105623854,
+      "chebyshev_z": 3.965196249686513,
+      "chebyshev_k": 7.479944619786238,
+      "isolation_forest_min_score": 0.5007975926367677,
+      "lof_min_score": 4.883829155293764
+    },
+    "leftmost": {
+      "window": 59,
+      "min_residual_ratio": 0.8530555321120563,
+      "efficiency": 0.05278754789116544,
+      "chebyshev_z": 3.0004783676755773,
+      "chebyshev_k": 10.297637792171566,
+      "isolation_forest_min_score": 0.8649550523560217,
+      "lof_min_score": 4.399656462815489
+    }
+  },
+  "BY": {
+    "selected": {
+      "window": 68,
+      "min_residual_ratio": 0.010188574661023063,
+      "efficiency": 0.05480911212963087,
+      "chebyshev_z": 3.007304664583349,
+      "chebyshev_k": 5.502507680621309,
+      "isolation_forest_min_score": 0.5189851212774027,
+      "lof_min_score": 4.79377359895586
+    },
+    "leftmost": {
+      "window": 71,
+      "min_residual_ratio": 0.014321495101873524,
+      "efficiency": 0.054317357865734786,
+      "chebyshev_z": 3.043662459282811,
+      "chebyshev_k": 5.070949281461088,
+      "isolation_forest_min_score": 0.9643301786019948,
+      "lof_min_score": 4.924551766043149
+    }
+  },
+  "CD": {
+    "selected": {
+      "window": 83,
+      "min_residual_ratio": 0.0,
+      "efficiency": 0.07644537107583976,
+      "chebyshev_z": 3.526526415506898,
+      "chebyshev_k": 12.568102391837868,
+      "isolation_forest_min_score": 0.6010840611653766,
+      "lof_min_score": 3.21755256462057
+    },
+    "leftmost": {
+      "window": 83,
+      "min_residual_ratio": 0.0,
+      "efficiency": 0.07644537107583976,
+      "chebyshev_z": 3.526526415506898,
+      "chebyshev_k": 12.568102391837868,
+      "isolation_forest_min_score": 0.6010840611653766,
+      "lof_min_score": 3.21755256462057
+    }
+  },
+  "CM": {
+    "selected": {
+      "window": 30,
+      "min_residual_ratio": 0.2835342500508983,
+      "efficiency": 0.061670334388856475,
+      "chebyshev_z": 3.9476622230478378,
+      "chebyshev_k": 6.97581562237433,
+      "isolation_forest_min_score": 0.8041364846193669,
+      "lof_min_score": 1.232579779939157
+    },
+    "leftmost": {
+      "window": 30,
+      "min_residual_ratio": 0.30498366883455286,
+      "efficiency": 0.0895253870786988,
+      "chebyshev_z": 3.01998074531899,
+      "chebyshev_k": 10.707991783573542,
+      "isolation_forest_min_score": 0.5424589356402985,
+      "lof_min_score": 4.0595947748857855
+    }
+  },
+  "CN": {
+    "selected": {
+      "window": 38,
+      "min_residual_ratio": 0.00017984692328866514,
+      "efficiency": 0.050153496782221675,
+      "chebyshev_z": 3.1024925283678355,
+      "chebyshev_k": 16.733597110627034,
+      "isolation_forest_min_score": 0.7871059524515559,
+      "lof_min_score": 4.673809766455325
+    },
+    "leftmost": {
+      "window": 34,
+      "min_residual_ratio": 0.9370615916189178,
+      "efficiency": 0.05031097948738897,
+      "chebyshev_z": 4.178592700599491,
+      "chebyshev_k": 16.613756707716284,
+      "isolation_forest_min_score": 0.8475972868664292,
+      "lof_min_score": 3.0904442001848276
+    }
+  },
+  "CU": {
+    "selected": {
+      "window": 59,
+      "min_residual_ratio": 0.028327121161921275,
+      "efficiency": 0.0702723589676182,
+      "chebyshev_z": 4.626374346053188,
+      "chebyshev_k": 13.95996221335495,
+      "isolation_forest_min_score": 0.6358139760039947,
+      "lof_min_score": 4.970591216332487
+    },
+    "leftmost": {
+      "window": 59,
+      "min_residual_ratio": 0.05187603994091099,
+      "efficiency": 0.07957430133745562,
+      "chebyshev_z": 4.010440876864588,
+      "chebyshev_k": 16.816355458447568,
+      "isolation_forest_min_score": 0.5913199484993741,
+      "lof_min_score": 3.6296150942109753
+    }
+  },
+  "DZ": {
+    "selected": {
+      "window": 71,
+      "min_residual_ratio": 0.044795321082734624,
+      "efficiency": 0.05421809584855206,
+      "chebyshev_z": 4.439439906484343,
+      "chebyshev_k": 6.452014172066886,
+      "isolation_forest_min_score": 0.5092770850579825,
+      "lof_min_score": 4.276228117083723
+    },
+    "leftmost": {
+      "window": 85,
+      "min_residual_ratio": 0.10865108445002336,
+      "efficiency": 0.05358275404152864,
+      "chebyshev_z": 3.034133733292766,
+      "chebyshev_k": 5.088949499749763,
+      "isolation_forest_min_score": 0.8739029610252732,
+      "lof_min_score": 4.287923003925266
+    }
+  },
+  "EC": {
+    "selected": {
+      "window": 71,
+      "min_residual_ratio": 0.3242705443139353,
+      "efficiency": 0.05249034379200162,
+      "chebyshev_z": 3.063166873729964,
+      "chebyshev_k": 11.927738036095905,
+      "isolation_forest_min_score": 0.5118978336294344,
+      "lof_min_score": 1.32594575717192
+    },
+    "leftmost": {
+      "window": 75,
+      "min_residual_ratio": 0.7940549002953272,
+      "efficiency": 0.05267497820096356,
+      "chebyshev_z": 4.111686082223275,
+      "chebyshev_k": 17.270489972997286,
+      "isolation_forest_min_score": 0.5117011689363039,
+      "lof_min_score": 3.9957104157760783
+    }
+  },
+  "EG": {
+    "selected": {
+      "window": 84,
+      "min_residual_ratio": 0.9801546058250928,
+      "efficiency": 0.05104293018635422,
+      "chebyshev_z": 4.254548064971463,
+      "chebyshev_k": 5.498607975266835,
+      "isolation_forest_min_score": 0.5032291929618716,
+      "lof_min_score": 1.1457978641807842
+    },
+    "leftmost": {
+      "window": 89,
+      "min_residual_ratio": 0.9785215168847864,
+      "efficiency": 0.050075766332523634,
+      "chebyshev_z": 4.578082694802164,
+      "chebyshev_k": 5.645378577723968,
+      "isolation_forest_min_score": 0.5003620991711215,
+      "lof_min_score": 3.782151451093065
+    }
+  },
+  "ES": {
+    "selected": {
+      "window": 57,
+      "min_residual_ratio": 0.7299474759816784,
+      "efficiency": 0.0921796365969649,
+      "chebyshev_z": 4.802989867344024,
+      "chebyshev_k": 5.575559641917956,
+      "isolation_forest_min_score": 0.8524148639872678,
+      "lof_min_score": 4.994738464610842
+    },
+    "leftmost": {
+      "window": 57,
+      "min_residual_ratio": 0.7299474759816784,
+      "efficiency": 0.0921796365969649,
+      "chebyshev_z": 4.802989867344024,
+      "chebyshev_k": 5.575559641917956,
+      "isolation_forest_min_score": 0.8524148639872678,
+      "lof_min_score": 4.994738464610842
+    }
+  },
+  "ET": {
+    "selected": {
+      "window": 41,
+      "min_residual_ratio": 0.04941836926222225,
+      "efficiency": 0.05206985647743542,
+      "chebyshev_z": 4.172215726604244,
+      "chebyshev_k": 7.836117835081432,
+      "isolation_forest_min_score": 0.8668808860756447,
+      "lof_min_score": 1.910986250267532
+    },
+    "leftmost": {
+      "window": 41,
+      "min_residual_ratio": 0.04941836926222225,
+      "efficiency": 0.05206985647743542,
+      "chebyshev_z": 4.172215726604244,
+      "chebyshev_k": 7.836117835081432,
+      "isolation_forest_min_score": 0.8668808860756447,
+      "lof_min_score": 1.910986250267532
+    }
+  },
+  "GA": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 0.23107568887958635,
+      "efficiency": 0.08732175210257352,
+      "chebyshev_z": 4.52426911457644,
+      "chebyshev_k": 11.72398800865409,
+      "isolation_forest_min_score": 0.5765826886302449,
+      "lof_min_score": 3.472417718533656
+    },
+    "leftmost": {
+      "window": 90,
+      "min_residual_ratio": 0.23107568887958635,
+      "efficiency": 0.08732175210257352,
+      "chebyshev_z": 4.52426911457644,
+      "chebyshev_k": 11.72398800865409,
+      "isolation_forest_min_score": 0.5765826886302449,
+      "lof_min_score": 3.472417718533656
+    }
+  },
+  "GB": {
+    "selected": {
+      "window": 88,
+      "min_residual_ratio": 0.4790043832488231,
+      "efficiency": 0.06139029877589947,
+      "chebyshev_z": 4.395578325811602,
+      "chebyshev_k": 5.59189893196166,
+      "isolation_forest_min_score": 0.5082671528910985,
+      "lof_min_score": 3.781280699777183
+    },
+    "leftmost": {
+      "window": 89,
+      "min_residual_ratio": 0.9640672771458288,
+      "efficiency": 0.08967564767260436,
+      "chebyshev_z": 4.7990119838898755,
+      "chebyshev_k": 7.864359511716602,
+      "isolation_forest_min_score": 0.8320637355145046,
+      "lof_min_score": 3.658457677362696
+    }
+  },
+  "GN": {
+    "selected": {
+      "window": 32,
+      "min_residual_ratio": 0.9017159555307626,
+      "efficiency": 0.08894695086826518,
+      "chebyshev_z": 4.4832628730172885,
+      "chebyshev_k": 13.803997246233672,
+      "isolation_forest_min_score": 0.981873339448998,
+      "lof_min_score": 1.2340730296923264
+    },
+    "leftmost": {
+      "window": 32,
+      "min_residual_ratio": 0.9017159555307626,
+      "efficiency": 0.08894695086826518,
+      "chebyshev_z": 4.4832628730172885,
+      "chebyshev_k": 13.803997246233672,
+      "isolation_forest_min_score": 0.981873339448998,
+      "lof_min_score": 1.2340730296923264
+    }
+  },
+  "GQ": {
+    "selected": {
+      "window": 87,
+      "min_residual_ratio": 1.9414912918977e-17,
+      "efficiency": 0.07333280523518404,
+      "chebyshev_z": 4.741361082173535,
+      "chebyshev_k": 5.9306933239967075,
+      "isolation_forest_min_score": 0.8419864955232361,
+      "lof_min_score": 3.2825013833016157
+    },
+    "leftmost": {
+      "window": 87,
+      "min_residual_ratio": 1.9414912918977e-17,
+      "efficiency": 0.07333280523518404,
+      "chebyshev_z": 4.741361082173535,
+      "chebyshev_k": 5.9306933239967075,
+      "isolation_forest_min_score": 0.8419864955232361,
+      "lof_min_score": 3.2825013833016157
+    }
+  },
+  "HK": {
+    "selected": {
+      "window": 60,
+      "min_residual_ratio": 0.8103894025779423,
+      "efficiency": 0.0505595259269887,
+      "chebyshev_z": 4.9405175684900655,
+      "chebyshev_k": 10.144937234618803,
+      "isolation_forest_min_score": 0.5026972026248362,
+      "lof_min_score": 2.606274920165316
+    },
+    "leftmost": {
+      "window": 60,
+      "min_residual_ratio": 0.8103894025779423,
+      "efficiency": 0.0505595259269887,
+      "chebyshev_z": 4.9405175684900655,
+      "chebyshev_k": 10.144937234618803,
+      "isolation_forest_min_score": 0.5026972026248362,
+      "lof_min_score": 2.606274920165316
+    }
+  },
+  "ID": {
+    "selected": {
+      "window": 56,
+      "min_residual_ratio": 0.10042113609282512,
+      "efficiency": 0.055168665152403325,
+      "chebyshev_z": 3.4245773949775633,
+      "chebyshev_k": 5.061559069315663,
+      "isolation_forest_min_score": 0.5956249054371239,
+      "lof_min_score": 4.424761049318468
+    },
+    "leftmost": {
+      "window": 76,
+      "min_residual_ratio": 0.9852195163537432,
+      "efficiency": 0.07056489527930744,
+      "chebyshev_z": 3.732183247967376,
+      "chebyshev_k": 15.774621301010985,
+      "isolation_forest_min_score": 0.5503797525519891,
+      "lof_min_score": 3.828611897335666
+    }
+  },
+  "IN": {
+    "selected": {
+      "window": 58,
+      "min_residual_ratio": 0.028944258697056136,
+      "efficiency": 0.05086893683940548,
+      "chebyshev_z": 3.106358940525432,
+      "chebyshev_k": 5.057126388775217,
+      "isolation_forest_min_score": 0.5250539368002276,
+      "lof_min_score": 3.5327190435229845
+    },
+    "leftmost": {
+      "window": 61,
+      "min_residual_ratio": 0.30228980409857353,
+      "efficiency": 0.05491824469156416,
+      "chebyshev_z": 3.015621884970193,
+      "chebyshev_k": 5.858640613604787,
+      "isolation_forest_min_score": 0.7938822270866581,
+      "lof_min_score": 3.7050905674520385
+    }
+  },
+  "IQ": {
+    "selected": {
+      "window": 39,
+      "min_residual_ratio": 0.018171054555949914,
+      "efficiency": 0.05000789409544468,
+      "chebyshev_z": 4.917114730451761,
+      "chebyshev_k": 5.0527453778963,
+      "isolation_forest_min_score": 0.5686836681723411,
+      "lof_min_score": 4.237743110984515
+    },
+    "leftmost": {
+      "window": 43,
+      "min_residual_ratio": 0.020640396040492687,
+      "efficiency": 0.051714570544926355,
+      "chebyshev_z": 4.874529439423391,
+      "chebyshev_k": 5.0104945684010795,
+      "isolation_forest_min_score": 0.8553745792178606,
+      "lof_min_score": 4.07355502658047
+    }
+  },
+  "IT": {
+    "selected": {
+      "window": 59,
+      "min_residual_ratio": 0.5340003110838957,
+      "efficiency": 0.056268978449736426,
+      "chebyshev_z": 3.002902399839059,
+      "chebyshev_k": 5.011916369328448,
+      "isolation_forest_min_score": 0.5125330072526117,
+      "lof_min_score": 3.942216398732683
+    },
+    "leftmost": {
+      "window": 80,
+      "min_residual_ratio": 0.9624497555234688,
+      "efficiency": 0.059419525313983555,
+      "chebyshev_z": 3.0572840328787314,
+      "chebyshev_k": 5.563737346929861,
+      "isolation_forest_min_score": 0.8539317280904313,
+      "lof_min_score": 3.927795524934834
+    }
+  },
+  "JO": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 0.07956985931262862,
+      "efficiency": 0.0515954377515419,
+      "chebyshev_z": 3.088303724526435,
+      "chebyshev_k": 5.810214142876199,
+      "isolation_forest_min_score": 0.8697225402375296,
+      "lof_min_score": 2.378805830879985
+    },
+    "leftmost": {
+      "window": 90,
+      "min_residual_ratio": 0.07956985931262862,
+      "efficiency": 0.0515954377515419,
+      "chebyshev_z": 3.088303724526435,
+      "chebyshev_k": 5.810214142876199,
+      "isolation_forest_min_score": 0.8697225402375296,
+      "lof_min_score": 2.378805830879985
+    }
+  },
+  "KE": {
+    "selected": {
+      "window": 81,
+      "min_residual_ratio": 0.04635115181054635,
+      "efficiency": 0.0844869095933057,
+      "chebyshev_z": 3.2666691636306755,
+      "chebyshev_k": 7.429241639628487,
+      "isolation_forest_min_score": 0.503512465087479,
+      "lof_min_score": 4.122966681291712
+    },
+    "leftmost": {
+      "window": 72,
+      "min_residual_ratio": 0.2133983760647868,
+      "efficiency": 0.05820248697601202,
+      "chebyshev_z": 4.531934482766968,
+      "chebyshev_k": 5.530989994554,
+      "isolation_forest_min_score": 0.8617004587561835,
+      "lof_min_score": 3.6818916842947265
+    }
+  },
+  "KG": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 0.05559626667910803,
+      "efficiency": 0.0537571372146766,
+      "chebyshev_z": 4.993060213972506,
+      "chebyshev_k": 10.783731030702365,
+      "isolation_forest_min_score": 0.9782199962084912,
+      "lof_min_score": 1.3150571360553962
+    },
+    "leftmost": {
+      "window": 55,
+      "min_residual_ratio": 0.2548146704212668,
+      "efficiency": 0.055236037108020886,
+      "chebyshev_z": 3.9844604347118393,
+      "chebyshev_k": 15.080928853292749,
+      "isolation_forest_min_score": 0.80710838398517,
+      "lof_min_score": 2.9859579575991497
+    }
+  },
+  "KH": {
+    "selected": {
+      "window": 36,
+      "min_residual_ratio": 0.2845661478512129,
+      "efficiency": 0.08836954662605229,
+      "chebyshev_z": 3.0032367317687827,
+      "chebyshev_k": 5.960440163489374,
+      "isolation_forest_min_score": 0.7631458914190493,
+      "lof_min_score": 4.4078595075279585
+    },
+    "leftmost": {
+      "window": 89,
+      "min_residual_ratio": 0.7298792042867406,
+      "efficiency": 0.07524215389342312,
+      "chebyshev_z": 3.091630443829391,
+      "chebyshev_k": 5.987828074186412,
+      "isolation_forest_min_score": 0.8893680657584662,
+      "lof_min_score": 4.959280528031749
+    }
+  },
+  "KZ": {
+    "selected": {
+      "window": 51,
+      "min_residual_ratio": 0.011828409241515824,
+      "efficiency": 0.09209441410234066,
+      "chebyshev_z": 4.1841942715607985,
+      "chebyshev_k": 15.249779756885498,
+      "isolation_forest_min_score": 0.5006215152781213,
+      "lof_min_score": 1.2635262973525383
+    },
+    "leftmost": {
+      "window": 51,
+      "min_residual_ratio": 0.011828409241515824,
+      "efficiency": 0.09209441410234066,
+      "chebyshev_z": 4.1841942715607985,
+      "chebyshev_k": 15.249779756885498,
+      "isolation_forest_min_score": 0.5006215152781213,
+      "lof_min_score": 1.2635262973525383
+    }
+  },
+  "LB": {
+    "selected": {
+      "window": 36,
+      "min_residual_ratio": 0.6353384723701733,
+      "efficiency": 0.06423031377336957,
+      "chebyshev_z": 4.931662852705161,
+      "chebyshev_k": 8.710585308942806,
+      "isolation_forest_min_score": 0.5432002359557997,
+      "lof_min_score": 4.05670485252549
+    },
+    "leftmost": {
+      "window": 49,
+      "min_residual_ratio": 0.731498277932213,
+      "efficiency": 0.07393571309327439,
+      "chebyshev_z": 3.3079074927907763,
+      "chebyshev_k": 14.256752102686082,
+      "isolation_forest_min_score": 0.971559395211502,
+      "lof_min_score": 1.753099860459838
+    }
+  },
+  "LK": {
+    "selected": {
+      "window": 59,
+      "min_residual_ratio": 0.0009860229886329772,
+      "efficiency": 0.06661219321307847,
+      "chebyshev_z": 4.229914964606458,
+      "chebyshev_k": 10.005763025277007,
+      "isolation_forest_min_score": 0.5149837961363939,
+      "lof_min_score": 3.781606200198045
+    },
+    "leftmost": {
+      "window": 59,
+      "min_residual_ratio": 0.017160891938064672,
+      "efficiency": 0.0694467667157167,
+      "chebyshev_z": 4.261279149451703,
+      "chebyshev_k": 10.39011445468096,
+      "isolation_forest_min_score": 0.5117228569515495,
+      "lof_min_score": 3.516737090772637
+    }
+  },
+  "LY": {
+    "selected": {
+      "window": 42,
+      "min_residual_ratio": 0.0898921724971347,
+      "efficiency": 0.08667723490297981,
+      "chebyshev_z": 4.199342736037016,
+      "chebyshev_k": 14.104335849829692,
+      "isolation_forest_min_score": 0.7264563778970485,
+      "lof_min_score": 3.970189715040364
+    },
+    "leftmost": {
+      "window": 87,
+      "min_residual_ratio": 0.1720070396288244,
+      "efficiency": 0.052116016037556466,
+      "chebyshev_z": 3.5793064753081523,
+      "chebyshev_k": 14.168901055019552,
+      "isolation_forest_min_score": 0.6487749385473509,
+      "lof_min_score": 1.3841231415293649
+    }
+  },
+  "MA": {
+    "selected": {
+      "window": 30,
+      "min_residual_ratio": 0.9581695023471712,
+      "efficiency": 0.05183718948013722,
+      "chebyshev_z": 3.165032370638891,
+      "chebyshev_k": 14.65608182820542,
+      "isolation_forest_min_score": 0.5011473616772542,
+      "lof_min_score": 1.158087583864778
+    },
+    "leftmost": {
+      "window": 30,
+      "min_residual_ratio": 0.7385459906463623,
+      "efficiency": 0.05499007797475723,
+      "chebyshev_z": 3.0123776034540612,
+      "chebyshev_k": 6.97403414741106,
+      "isolation_forest_min_score": 0.9028296033894684,
+      "lof_min_score": 3.8423982941545223
+    }
+  },
+  "ML": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 0.26259497630437656,
+      "efficiency": 0.09511880292904616,
+      "chebyshev_z": 4.382495830680987,
+      "chebyshev_k": 10.305770505894564,
+      "isolation_forest_min_score": 0.8888616503538742,
+      "lof_min_score": 4.293892486135094
+    },
+    "leftmost": {
+      "window": 90,
+      "min_residual_ratio": 0.43115979812598954,
+      "efficiency": 0.09803910215573122,
+      "chebyshev_z": 4.370802293069734,
+      "chebyshev_k": 10.034979776631856,
+      "isolation_forest_min_score": 0.9033960420013544,
+      "lof_min_score": 3.851841357914701
+    }
+  },
+  "MM": {
+    "selected": {
+      "window": 31,
+      "min_residual_ratio": 0.01702924556778234,
+      "efficiency": 0.050286588634126245,
+      "chebyshev_z": 3.1172107631740857,
+      "chebyshev_k": 5.99125023972936,
+      "isolation_forest_min_score": 0.7996820508070432,
+      "lof_min_score": 4.744885743718575
+    },
+    "leftmost": {
+      "window": 30,
+      "min_residual_ratio": 0.10893733746153622,
+      "efficiency": 0.05004176670702563,
+      "chebyshev_z": 3.038729373073661,
+      "chebyshev_k": 5.141496970171914,
+      "isolation_forest_min_score": 0.8967809048599672,
+      "lof_min_score": 4.934074212160702
+    }
+  },
+  "MU": {
+    "selected": {
+      "window": 47,
+      "min_residual_ratio": 0.10995009735726022,
+      "efficiency": 0.06554151256875468,
+      "chebyshev_z": 3.623516946602427,
+      "chebyshev_k": 5.635438038679821,
+      "isolation_forest_min_score": 0.7064118250521296,
+      "lof_min_score": 3.7396561106074406
+    },
+    "leftmost": {
+      "window": 47,
+      "min_residual_ratio": 0.10995009735726022,
+      "efficiency": 0.06554151256875468,
+      "chebyshev_z": 3.623516946602427,
+      "chebyshev_k": 5.635438038679821,
+      "isolation_forest_min_score": 0.7064118250521296,
+      "lof_min_score": 3.7396561106074406
+    }
+  },
+  "MY": {
+    "selected": {
+      "window": 68,
+      "min_residual_ratio": 0.9287509961965874,
+      "efficiency": 0.06154214053186992,
+      "chebyshev_z": 4.153648446323341,
+      "chebyshev_k": 5.875667913743519,
+      "isolation_forest_min_score": 0.8579518578591792,
+      "lof_min_score": 2.1797370850600677
+    },
+    "leftmost": {
+      "window": 68,
+      "min_residual_ratio": 0.9287509961965874,
+      "efficiency": 0.06154214053186992,
+      "chebyshev_z": 4.153648446323341,
+      "chebyshev_k": 5.875667913743519,
+      "isolation_forest_min_score": 0.8579518578591792,
+      "lof_min_score": 2.1797370850600677
+    }
+  },
+  "NG": {
+    "selected": {
+      "window": 43,
+      "min_residual_ratio": 0.11917153871925748,
+      "efficiency": 0.052029947692958545,
+      "chebyshev_z": 4.2486722546148705,
+      "chebyshev_k": 6.942265731063905,
+      "isolation_forest_min_score": 0.5010506079321717,
+      "lof_min_score": 4.086760407709347
+    },
+    "leftmost": {
+      "window": 48,
+      "min_residual_ratio": 0.1528852149163512,
+      "efficiency": 0.05204844651610687,
+      "chebyshev_z": 3.00003720007534,
+      "chebyshev_k": 11.071662375137242,
+      "isolation_forest_min_score": 0.8992520926165759,
+      "lof_min_score": 4.985068491588001
+    }
+  },
+  "NP": {
+    "selected": {
+      "window": 62,
+      "min_residual_ratio": 0.03430884088043855,
+      "efficiency": 0.050097918663184325,
+      "chebyshev_z": 4.743795142726039,
+      "chebyshev_k": 14.12902355371089,
+      "isolation_forest_min_score": 0.6546563855184062,
+      "lof_min_score": 4.994512088988919
+    },
+    "leftmost": {
+      "window": 87,
+      "min_residual_ratio": 0.04333449995968739,
+      "efficiency": 0.05001190958710618,
+      "chebyshev_z": 4.262881941784984,
+      "chebyshev_k": 17.107709569639418,
+      "isolation_forest_min_score": 0.6562177791355348,
+      "lof_min_score": 4.891202514206411
+    }
+  },
+  "OM": {
+    "selected": {
+      "window": 57,
+      "min_residual_ratio": 0.9596458471274062,
+      "efficiency": 0.09702337855009938,
+      "chebyshev_z": 3.875162646287583,
+      "chebyshev_k": 8.514640842675162,
+      "isolation_forest_min_score": 0.5011004566420679,
+      "lof_min_score": 4.639828439465564
+    },
+    "leftmost": {
+      "window": 57,
+      "min_residual_ratio": 0.9596458471274062,
+      "efficiency": 0.09702337855009938,
+      "chebyshev_z": 3.875162646287583,
+      "chebyshev_k": 8.514640842675162,
+      "isolation_forest_min_score": 0.5011004566420679,
+      "lof_min_score": 4.639828439465564
+    }
+  },
+  "PH": {
+    "selected": {
+      "window": 70,
+      "min_residual_ratio": 0.657609641277676,
+      "efficiency": 0.05196922023659746,
+      "chebyshev_z": 3.0828726355213485,
+      "chebyshev_k": 5.322048078238294,
+      "isolation_forest_min_score": 0.5002029694227588,
+      "lof_min_score": 4.107870444960195
+    },
+    "leftmost": {
+      "window": 62,
+      "min_residual_ratio": 0.9521906589315896,
+      "efficiency": 0.0581555830470688,
+      "chebyshev_z": 3.005981593537603,
+      "chebyshev_k": 5.000384443494409,
+      "isolation_forest_min_score": 0.980799282003798,
+      "lof_min_score": 2.9544229208358996
+    }
+  },
+  "PK": {
+    "selected": {
+      "window": 86,
+      "min_residual_ratio": 3.806511785673404e-06,
+      "efficiency": 0.05080545181780583,
+      "chebyshev_z": 3.36291222443364,
+      "chebyshev_k": 5.037038212038313,
+      "isolation_forest_min_score": 0.5069176181108467,
+      "lof_min_score": 4.610380201352087
+    },
+    "leftmost": {
+      "window": 87,
+      "min_residual_ratio": 0.1192356081636089,
+      "efficiency": 0.05011872092438238,
+      "chebyshev_z": 4.043750418949999,
+      "chebyshev_k": 5.049336958847951,
+      "isolation_forest_min_score": 0.5053900567458838,
+      "lof_min_score": 3.6599082975006287
+    }
+  },
+  "QA": {
+    "selected": {
+      "window": 32,
+      "min_residual_ratio": 0.3077391929379805,
+      "efficiency": 0.08473520338425042,
+      "chebyshev_z": 4.393186624357859,
+      "chebyshev_k": 10.269497493386078,
+      "isolation_forest_min_score": 0.914835307428704,
+      "lof_min_score": 4.195332242038613
+    },
+    "leftmost": {
+      "window": 90,
+      "min_residual_ratio": 0.4089574331901736,
+      "efficiency": 0.06950688423387487,
+      "chebyshev_z": 3.3784646754233836,
+      "chebyshev_k": 8.279343251019075,
+      "isolation_forest_min_score": 0.9768978848126948,
+      "lof_min_score": 4.196891541436851
+    }
+  },
+  "RU": {
+    "selected": {
+      "window": 65,
+      "min_residual_ratio": 0.17156035514173168,
+      "efficiency": 0.05116428068732621,
+      "chebyshev_z": 4.95995414922167,
+      "chebyshev_k": 5.55357777995867,
+      "isolation_forest_min_score": 0.5001616673056778,
+      "lof_min_score": 4.986164693316036
+    },
+    "leftmost": {
+      "window": 65,
+      "min_residual_ratio": 0.17156035514173168,
+      "efficiency": 0.05116428068732621,
+      "chebyshev_z": 4.95995414922167,
+      "chebyshev_k": 5.55357777995867,
+      "isolation_forest_min_score": 0.5001616673056778,
+      "lof_min_score": 4.986164693316036
+    }
+  },
+  "SA": {
+    "selected": {
+      "window": 32,
+      "min_residual_ratio": 0.27485312225509567,
+      "efficiency": 0.09832549725602072,
+      "chebyshev_z": 3.3653735270137255,
+      "chebyshev_k": 5.0440713540119395,
+      "isolation_forest_min_score": 0.5343902345650393,
+      "lof_min_score": 4.934547467005125
+    },
+    "leftmost": {
+      "window": 52,
+      "min_residual_ratio": 0.5512891143795439,
+      "efficiency": 0.050497202762356794,
+      "chebyshev_z": 4.327219914166835,
+      "chebyshev_k": 7.49777752362724,
+      "isolation_forest_min_score": 0.5000393160962135,
+      "lof_min_score": 4.892745529586249
+    }
+  },
+  "SD": {
+    "selected": {
+      "window": 35,
+      "min_residual_ratio": 0.018132970308833814,
+      "efficiency": 0.05260135556848742,
+      "chebyshev_z": 3.106133972920619,
+      "chebyshev_k": 15.220810893916036,
+      "isolation_forest_min_score": 0.9825784073872325,
+      "lof_min_score": 3.0327451606804767
+    },
+    "leftmost": {
+      "window": 68,
+      "min_residual_ratio": 0.1325892249514781,
+      "efficiency": 0.055694789145257086,
+      "chebyshev_z": 4.5698645651578325,
+      "chebyshev_k": 14.94763342953886,
+      "isolation_forest_min_score": 0.5479812038229405,
+      "lof_min_score": 3.828876590467204
+    }
+  },
+  "SN": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 0.008628352871604657,
+      "efficiency": 0.061398231442516125,
+      "chebyshev_z": 4.704736988127481,
+      "chebyshev_k": 9.899801707926954,
+      "isolation_forest_min_score": 0.9595145330522338,
+      "lof_min_score": 1.715878906147344
+    },
+    "leftmost": {
+      "window": 90,
+      "min_residual_ratio": 0.008628352871604657,
+      "efficiency": 0.061398231442516125,
+      "chebyshev_z": 4.704736988127481,
+      "chebyshev_k": 9.899801707926954,
+      "isolation_forest_min_score": 0.9595145330522338,
+      "lof_min_score": 1.715878906147344
+    }
+  },
+  "SO": {
+    "selected": {
+      "window": 31,
+      "min_residual_ratio": 0.8741071142568951,
+      "efficiency": 0.06011239449772717,
+      "chebyshev_z": 3.132270072560567,
+      "chebyshev_k": 6.694757697732959,
+      "isolation_forest_min_score": 0.743577570859469,
+      "lof_min_score": 1.7521567405993967
+    },
+    "leftmost": {
+      "window": 89,
+      "min_residual_ratio": 0.8916521578510718,
+      "efficiency": 0.05916196010895584,
+      "chebyshev_z": 3.526440233456295,
+      "chebyshev_k": 5.675463668201385,
+      "isolation_forest_min_score": 0.7791422382264938,
+      "lof_min_score": 4.094999037668468
+    }
+  },
+  "SR": {
+    "selected": {
+      "window": 50,
+      "min_residual_ratio": 4.906175590938853e-17,
+      "efficiency": 0.07348247756621258,
+      "chebyshev_z": 3.7816115857478545,
+      "chebyshev_k": 17.20404626708978,
+      "isolation_forest_min_score": 0.7857000271939402,
+      "lof_min_score": 2.8014185920317707
+    },
+    "leftmost": {
+      "window": 50,
+      "min_residual_ratio": 4.906175590938853e-17,
+      "efficiency": 0.07348247756621258,
+      "chebyshev_z": 3.7816115857478545,
+      "chebyshev_k": 17.20404626708978,
+      "isolation_forest_min_score": 0.7857000271939402,
+      "lof_min_score": 2.8014185920317707
+    }
+  },
+  "SS": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 0.5958929847926542,
+      "efficiency": 0.05002563081053051,
+      "chebyshev_z": 3.684507176168141,
+      "chebyshev_k": 13.368508486742323,
+      "isolation_forest_min_score": 0.625890021497292,
+      "lof_min_score": 1.823629361834431
+    },
+    "leftmost": {
+      "window": 90,
+      "min_residual_ratio": 0.5958929847926542,
+      "efficiency": 0.05002563081053051,
+      "chebyshev_z": 3.684507176168141,
+      "chebyshev_k": 13.368508486742323,
+      "isolation_forest_min_score": 0.625890021497292,
+      "lof_min_score": 1.823629361834431
+    }
+  },
+  "SZ": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 0.06279462746425145,
+      "efficiency": 0.08538849163527844,
+      "chebyshev_z": 4.281592950646114,
+      "chebyshev_k": 6.122855501572978,
+      "isolation_forest_min_score": 0.7723608578528703,
+      "lof_min_score": 4.9071487206567275
+    },
+    "leftmost": {
+      "window": 90,
+      "min_residual_ratio": 0.06279462746425145,
+      "efficiency": 0.08538849163527844,
+      "chebyshev_z": 4.281592950646114,
+      "chebyshev_k": 6.122855501572978,
+      "isolation_forest_min_score": 0.7723608578528703,
+      "lof_min_score": 4.9071487206567275
+    }
+  },
+  "TD": {
+    "selected": {
+      "window": 52,
+      "min_residual_ratio": 2.6007753305511997e-17,
+      "efficiency": 0.053378965786578206,
+      "chebyshev_z": 4.0255132043335005,
+      "chebyshev_k": 13.107461833518611,
+      "isolation_forest_min_score": 0.6751668765347327,
+      "lof_min_score": 3.084482115213471
+    },
+    "leftmost": {
+      "window": 52,
+      "min_residual_ratio": 2.6007753305511997e-17,
+      "efficiency": 0.053378965786578206,
+      "chebyshev_z": 4.0255132043335005,
+      "chebyshev_k": 13.107461833518611,
+      "isolation_forest_min_score": 0.6751668765347327,
+      "lof_min_score": 3.084482115213471
+    }
+  },
+  "TG": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 6.309891478316973e-18,
+      "efficiency": 0.05109246459571942,
+      "chebyshev_z": 3.841366268031691,
+      "chebyshev_k": 6.538371427739796,
+      "isolation_forest_min_score": 0.570854936410891,
+      "lof_min_score": 4.760356588123065
+    },
+    "leftmost": {
+      "window": 90,
+      "min_residual_ratio": 6.309891478316973e-18,
+      "efficiency": 0.05109246459571942,
+      "chebyshev_z": 3.841366268031691,
+      "chebyshev_k": 6.538371427739796,
+      "isolation_forest_min_score": 0.570854936410891,
+      "lof_min_score": 4.760356588123065
+    }
+  },
+  "TH": {
+    "selected": {
+      "window": 71,
+      "min_residual_ratio": 5.728662348304076e-07,
+      "efficiency": 0.0525233585372346,
+      "chebyshev_z": 4.513461571816367,
+      "chebyshev_k": 5.024844586980792,
+      "isolation_forest_min_score": 0.8237564255524781,
+      "lof_min_score": 4.253123395897119
+    },
+    "leftmost": {
+      "window": 50,
+      "min_residual_ratio": 0.7444372172398526,
+      "efficiency": 0.07674096020925686,
+      "chebyshev_z": 3.011211044932113,
+      "chebyshev_k": 12.360182848842667,
+      "isolation_forest_min_score": 0.8417238366921849,
+      "lof_min_score": 4.362941019754162
+    }
+  },
+  "TJ": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 0.8226414510922073,
+      "efficiency": 0.05217508641390526,
+      "chebyshev_z": 4.1121966574147075,
+      "chebyshev_k": 16.923418331354274,
+      "isolation_forest_min_score": 0.6712175373156356,
+      "lof_min_score": 4.627404788200213
+    },
+    "leftmost": {
+      "window": 90,
+      "min_residual_ratio": 0.8226414510922073,
+      "efficiency": 0.05217508641390526,
+      "chebyshev_z": 4.1121966574147075,
+      "chebyshev_k": 16.923418331354274,
+      "isolation_forest_min_score": 0.6712175373156356,
+      "lof_min_score": 4.627404788200213
+    }
+  },
+  "TM": {
+    "selected": {
+      "window": 36,
+      "min_residual_ratio": 0.16392212288143765,
+      "efficiency": 0.07510964805697921,
+      "chebyshev_z": 3.253138314456306,
+      "chebyshev_k": 8.23599522529968,
+      "isolation_forest_min_score": 0.5074332123463259,
+      "lof_min_score": 4.746491395848221
+    },
+    "leftmost": {
+      "window": 44,
+      "min_residual_ratio": 0.19683534629722604,
+      "efficiency": 0.07839624055105007,
+      "chebyshev_z": 4.215938462369066,
+      "chebyshev_k": 16.664195246724486,
+      "isolation_forest_min_score": 0.5408504614767603,
+      "lof_min_score": 4.067138657376469
+    }
+  },
+  "TN": {
+    "selected": {
+      "window": 87,
+      "min_residual_ratio": 0.7423048198187805,
+      "efficiency": 0.07472827388120419,
+      "chebyshev_z": 4.575259698131138,
+      "chebyshev_k": 9.540016254845924,
+      "isolation_forest_min_score": 0.9009268017541574,
+      "lof_min_score": 3.7508386295130474
+    },
+    "leftmost": {
+      "window": 87,
+      "min_residual_ratio": 0.935843690623696,
+      "efficiency": 0.07211690093023818,
+      "chebyshev_z": 4.6131820910475705,
+      "chebyshev_k": 17.988104053662493,
+      "isolation_forest_min_score": 0.8473583113282621,
+      "lof_min_score": 2.333013629865116
+    }
+  },
+  "TZ": {
+    "selected": {
+      "window": 52,
+      "min_residual_ratio": 0.006889747576816151,
+      "efficiency": 0.07161768838753359,
+      "chebyshev_z": 3.1927658426795813,
+      "chebyshev_k": 10.886025200350495,
+      "isolation_forest_min_score": 0.8268888841136146,
+      "lof_min_score": 3.4041087776739136
+    },
+    "leftmost": {
+      "window": 43,
+      "min_residual_ratio": 0.03745744192830349,
+      "efficiency": 0.065751221200673,
+      "chebyshev_z": 3.1752896494960954,
+      "chebyshev_k": 11.818094569514836,
+      "isolation_forest_min_score": 0.8970625041305489,
+      "lof_min_score": 3.1895863966894793
+    }
+  },
+  "UA": {
+    "selected": {
+      "window": 38,
+      "min_residual_ratio": 0.02160141248278402,
+      "efficiency": 0.050065234607915045,
+      "chebyshev_z": 3.273446845858565,
+      "chebyshev_k": 5.35466509727609,
+      "isolation_forest_min_score": 0.5334552784430788,
+      "lof_min_score": 3.2830446605128
+    },
+    "leftmost": {
+      "window": 30,
+      "min_residual_ratio": 0.34200674553881527,
+      "efficiency": 0.0634769104864593,
+      "chebyshev_z": 3.0120740284464285,
+      "chebyshev_k": 13.321283799061243,
+      "isolation_forest_min_score": 0.8789452215871577,
+      "lof_min_score": 2.1048980227560707
+    }
+  },
+  "UG": {
+    "selected": {
+      "window": 77,
+      "min_residual_ratio": 1.3648409175750356e-08,
+      "efficiency": 0.05037065624314251,
+      "chebyshev_z": 4.96102443048429,
+      "chebyshev_k": 5.452687103891949,
+      "isolation_forest_min_score": 0.7966689497071504,
+      "lof_min_score": 4.951244079037197
+    },
+    "leftmost": {
+      "window": 78,
+      "min_residual_ratio": 3.653777203576321e-08,
+      "efficiency": 0.05019569978232763,
+      "chebyshev_z": 4.104047958366202,
+      "chebyshev_k": 5.034474693908921,
+      "isolation_forest_min_score": 0.980399928291526,
+      "lof_min_score": 4.957636810152501
+    }
+  },
+  "VE": {
+    "selected": {
+      "window": 36,
+      "min_residual_ratio": 0.022372363013712974,
+      "efficiency": 0.05385591698104372,
+      "chebyshev_z": 4.10143513285553,
+      "chebyshev_k": 5.001051146921334,
+      "isolation_forest_min_score": 0.5519312201770168,
+      "lof_min_score": 3.577787483478428
+    },
+    "leftmost": {
+      "window": 30,
+      "min_residual_ratio": 0.17941893510212092,
+      "efficiency": 0.053342761664180366,
+      "chebyshev_z": 4.9275902329203936,
+      "chebyshev_k": 5.016074160668032,
+      "isolation_forest_min_score": 0.505389073575292,
+      "lof_min_score": 3.2205784225210747
+    }
+  },
+  "VN": {
+    "selected": {
+      "window": 90,
+      "min_residual_ratio": 0.42849936196707655,
+      "efficiency": 0.06334279813809393,
+      "chebyshev_z": 3.5912363291080283,
+      "chebyshev_k": 6.136176182994696,
+      "isolation_forest_min_score": 0.5043954035398579,
+      "lof_min_score": 4.9987459881199685
+    },
+    "leftmost": {
+      "window": 67,
+      "min_residual_ratio": 0.15387562518212605,
+      "efficiency": 0.06548144023879378,
+      "chebyshev_z": 3.0757834129497654,
+      "chebyshev_k": 6.59279606989902,
+      "isolation_forest_min_score": 0.9723812133440792,
+      "lof_min_score": 1.7662035286564308
+    }
+  },
+  "YE": {
+    "selected": {
+      "window": 67,
+      "min_residual_ratio": 0.3261100183809661,
+      "efficiency": 0.09851611457266532,
+      "chebyshev_z": 3.271223674333843,
+      "chebyshev_k": 9.365542489659411,
+      "isolation_forest_min_score": 0.8128890515131919,
+      "lof_min_score": 4.718553443442918
+    },
+    "leftmost": {
+      "window": 67,
+      "min_residual_ratio": 0.3261100183809661,
+      "efficiency": 0.056043200616432406,
+      "chebyshev_z": 3.2712082630091244,
+      "chebyshev_k": 10.330876103531176,
+      "isolation_forest_min_score": 0.8802097740527715,
+      "lof_min_score": 4.117432324358244
+    }
+  },
+  "ZW": {
+    "selected": {
+      "window": 35,
+      "min_residual_ratio": 0.106387157440449,
+      "efficiency": 0.08991082492779871,
+      "chebyshev_z": 3.403464702826718,
+      "chebyshev_k": 8.083897359494186,
+      "isolation_forest_min_score": 0.541111791500993,
+      "lof_min_score": 2.866993014612626
+    },
+    "leftmost": {
+      "window": 32,
+      "min_residual_ratio": 0.10602898575457784,
+      "efficiency": 0.08545151169844416,
+      "chebyshev_z": 3.790185442970341,
+      "chebyshev_k": 9.434500720372782,
+      "isolation_forest_min_score": 0.5112212051414873,
+      "lof_min_score": 4.082165057711044
+    }
+  }
+}

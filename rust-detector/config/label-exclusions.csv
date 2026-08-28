@@ -1,0 +1,7 @@
+country_code,start_date,description,category,reason
+RU,2015-11-10,Fallout 4 release,other,Not reliably preserved within the tuning search space
+RU,2017-06-08,Russian lawmakers propose legislation that would ban VPNs that allow users to access content that is banned in Russia,other,Not reliably preserved within the tuning search space
+RU,2017-06-26,Russia threatens to ban Telegram after Telegram refuses to hand over encrypted data of terrorist,other,Not reliably preserved within the tuning search space
+RU,2017-07-21,Russia's lower house passes laws banning VPNs enabling censorship circumvention ,other,Not reliably preserved within the tuning search space
+RU,2018-03-29,Telegram server outage,other,Duplicate of a global event and not a country constraint
+RU,2019-04-16,Russia’s lower house approved an Internet isolation law that would enable the creation of a domestic Internet capable of functioning even when disconnected from the global Internet.,other,Not reliably preserved within the tuning search space
