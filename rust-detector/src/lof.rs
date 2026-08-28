@@ -17,7 +17,7 @@ impl Detector for LocalOutlierFactorDetector {
         run_detector(
             observations,
             self.parameters.window,
-            self.parameters.min_residual,
+            self.parameters.min_residual_ratio,
             self.parameters.efficiency,
             LocalOutlierFactorScorer {
                 window: self.parameters.window,

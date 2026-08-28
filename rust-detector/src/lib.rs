@@ -36,8 +36,8 @@ pub use selection::{
 };
 pub use statistics::efficiency_ratio;
 pub use tuning::{
-    ensemble_parameters, evaluate_ensemble_parameters, evaluate_parameters, tune_chebyshev,
-    tune_ensemble, EnsembleParetoSolution, EnsembleTuningResult, ParetoSolution, TuningConfig,
-    TuningResult,
+    chebyshev_parameters, ensemble_parameters, evaluate_ensemble_parameters, evaluate_parameters,
+    tune_chebyshev, tune_ensemble, EnsembleParetoSolution, EnsembleTuningResult, ParetoSolution,
+    TuningConfig, TuningResult,
 };
 pub use window::{DemandCategory, SlidingWindow};

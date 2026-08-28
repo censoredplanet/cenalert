@@ -39,7 +39,7 @@ struct DetectArgs {
     /// Algorithm-specific detector parameter JSON.
     #[arg(long)]
     parameters: PathBuf,
-    /// Detection algorithm whose parameter array is supplied.
+    /// Detection algorithm whose parameter JSON is supplied.
     #[arg(long, value_enum, default_value_t = DetectionAlgorithm::Chebyshev)]
     algorithm: DetectionAlgorithm,
 }
@@ -149,11 +149,17 @@ fn run_selection(arguments: SelectArgs) -> Result<(), Box<dyn Error>> {
             let output = BufWriter::new(File::create(arguments.output)?);
             if let Some(position) = arguments.left_position {
                 let selected = select_nth_from_left(&front, position)?;
-                serde_json::to_writer_pretty(output, &selected.0)?;
+                serde_json::to_writer_pretty(
+                    output,
+                    &cenalert_detector::chebyshev_parameters(selected.0),
+                )?;
                 left_selection_message(position, selected.1)
             } else {
                 let selected = select_parameters(&front)?;
-                serde_json::to_writer_pretty(output, &selected.parameters)?;
+                serde_json::to_writer_pretty(
+                    output,
+                    &cenalert_detector::chebyshev_parameters(selected.parameters),
+                )?;
                 knee_selection_message(selected.objective, selected.knee, selected.method)
             }
         }

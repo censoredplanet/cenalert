@@ -29,9 +29,13 @@ from lib.detection import (  # noqa: E402
 class Ensemble(AnomalyDetector):
     """Three-detector majority-vote reference used for parity validation."""
 
-    def __init__(self, parameters: dict[str, float]):
+    def __init__(self, parameters: dict[str, float], series_maximum: float):
         window = int(parameters["window"])
-        min_residual = float(parameters["min_residual"])
+        min_residual = (
+            float(parameters["min_residual_ratio"]) * series_maximum
+            if "min_residual_ratio" in parameters
+            else float(parameters["min_residual"])
+        )
         efficiency = float(parameters["efficiency"])
         super().__init__(window, min_residual=min_residual, efficiency=efficiency)
         self._min_score = 2
@@ -96,7 +100,7 @@ def run_reference(
 ) -> list[dict[str, Any]]:
     records = json.loads(input_path.read_text())
     parameters = json.loads(parameters_path.read_text())
-    if algorithm != "ensemble":
+    if algorithm != "ensemble" and isinstance(parameters, list):
         parameters[0] = round(parameters[0])
 
     series = pl.DataFrame(
@@ -107,6 +111,29 @@ def run_reference(
             ],
         }
     ).sort("date")
+    series_maximum = float(series["value"].max())
+
+    if isinstance(parameters, dict) and algorithm != "ensemble":
+        min_residual = (
+            float(parameters["min_residual_ratio"]) * series_maximum
+            if "min_residual_ratio" in parameters
+            else float(parameters["min_residual"])
+        )
+        if algorithm == "chebyshev":
+            parameters = [
+                int(parameters["window"]),
+                float(parameters["z"]),
+                float(parameters["k"]),
+                min_residual,
+                float(parameters["efficiency"]),
+            ]
+        else:
+            parameters = [
+                int(parameters["window"]),
+                float(parameters["min_score"]),
+                min_residual,
+                float(parameters["efficiency"]),
+            ]
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -117,7 +144,7 @@ def run_reference(
         elif algorithm == "lof":
             detector = LocalOutlierFactor(*parameters)
         else:
-            detector = Ensemble(parameters)
+            detector = Ensemble(parameters, series_maximum)
         if algorithm != "chebyshev":
             # The paper implementation computes this expensive inverse-score
             # threshold only when an anomaly begins. The deployment snapshot's

@@ -21,7 +21,7 @@ impl Detector for IsolationForestDetector {
         run_detector(
             observations,
             self.parameters.window,
-            self.parameters.min_residual,
+            self.parameters.min_residual_ratio,
             self.parameters.efficiency,
             IsolationForestScorer {
                 minimum_score: self.parameters.min_score,

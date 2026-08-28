@@ -15,21 +15,23 @@ pub struct Observation {
 }
 
 /// Parameters used by the production Chebyshev/Z-Score detector.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DetectorParameters {
     pub window: usize,
     pub z: f64,
     pub k: f64,
-    pub min_residual: f64,
+    pub min_residual_ratio: f64,
     pub efficiency: f64,
 }
 
 /// Parameters shared by Isolation Forest and Local Outlier Factor detectors.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OutlierDetectorParameters {
     pub window: usize,
     pub min_score: f64,
-    pub min_residual: f64,
+    pub min_residual_ratio: f64,
     pub efficiency: f64,
 }
 
@@ -38,7 +40,7 @@ pub struct OutlierDetectorParameters {
 #[serde(deny_unknown_fields)]
 pub struct EnsembleParameters {
     pub window: usize,
-    pub min_residual: f64,
+    pub min_residual_ratio: f64,
     pub efficiency: f64,
     pub chebyshev_z: f64,
     pub chebyshev_k: f64,

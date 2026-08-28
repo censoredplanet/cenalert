@@ -19,7 +19,7 @@ const NEGATIVE_VISIBILITY: &str = "negative_visibility";
 const WINDOW: &str = "window";
 const Z: &str = "z";
 const K: &str = "k";
-const MIN_RESIDUAL: &str = "min_residual";
+const MIN_RESIDUAL_RATIO: &str = "min_residual_ratio";
 const EFFICIENCY: &str = "efficiency";
 const ISOLATION_FOREST_MIN_SCORE: &str = "isolation_forest_min_score";
 const LOF_MIN_SCORE: &str = "lof_min_score";
@@ -61,8 +61,9 @@ pub struct ParetoSolution(pub [f64; 5], pub [f64; 2]);
 
 /// A seven-parameter ensemble vector and its two minimization objectives.
 ///
-/// Parameters are ordered as window, minimum residual, efficiency, Chebyshev
-/// Z, Chebyshev K, Isolation Forest minimum score, and LOF minimum score.
+/// Parameters are ordered as window, minimum residual ratio, efficiency,
+/// Chebyshev Z, Chebyshev K, Isolation Forest minimum score, and LOF minimum
+/// score.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EnsembleParetoSolution(pub [f64; 7], pub [f64; 2]);
 
@@ -97,7 +98,7 @@ struct EnsembleEvaluator {
 impl Evaluator for ChebyshevEvaluator {
     fn evaluate(&self, individual: &Individual) -> Result<EvaluationResult, Box<dyn Error>> {
         let raw_parameters = parameter_values(individual)?;
-        let parameters = detector_parameters(raw_parameters);
+        let parameters = chebyshev_parameters(raw_parameters);
         let result = ChebyshevDetector::new(parameters).detect(&self.observations);
         evaluation_result(&result.anomalies, &self.labels, self.proximity_days)
     }
@@ -172,7 +173,7 @@ pub fn tune_ensemble(
 }
 
 pub fn evaluate_parameters(observations: &[Observation], raw_parameters: [f64; 5]) -> [f64; 2] {
-    let result = ChebyshevDetector::new(detector_parameters(raw_parameters)).detect(observations);
+    let result = ChebyshevDetector::new(chebyshev_parameters(raw_parameters)).detect(observations);
     objectives_from_anomalies(&result.anomalies)
 }
 
@@ -184,12 +185,12 @@ pub fn evaluate_ensemble_parameters(
     objectives_from_anomalies(&result.anomalies)
 }
 
-fn detector_parameters(raw_parameters: [f64; 5]) -> DetectorParameters {
+pub fn chebyshev_parameters(raw_parameters: [f64; 5]) -> DetectorParameters {
     DetectorParameters {
         window: raw_parameters[0].round_ties_even() as usize,
         z: raw_parameters[1],
         k: raw_parameters[2],
-        min_residual: raw_parameters[3],
+        min_residual_ratio: raw_parameters[3],
         efficiency: raw_parameters[4],
     }
 }
@@ -197,7 +198,7 @@ fn detector_parameters(raw_parameters: [f64; 5]) -> DetectorParameters {
 pub fn ensemble_parameters(raw_parameters: [f64; 7]) -> EnsembleParameters {
     EnsembleParameters {
         window: raw_parameters[0].round_ties_even() as usize,
-        min_residual: raw_parameters[1],
+        min_residual_ratio: raw_parameters[1],
         efficiency: raw_parameters[2],
         chebyshev_z: raw_parameters[3],
         chebyshev_k: raw_parameters[4],
@@ -248,7 +249,7 @@ fn create_problem(
         real_variable(WINDOW, 30.0, 90.0)?,
         real_variable(Z, 3.0, 5.0)?,
         real_variable(K, config.k_min, config.k_max)?,
-        real_variable(MIN_RESIDUAL, 1.0, 100.0)?,
+        real_variable(MIN_RESIDUAL_RATIO, 0.0, 1.0)?,
         real_variable(EFFICIENCY, 0.01, 0.1)?,
     ];
     let constraints = (!required_labels.is_empty()).then(|| {
@@ -281,7 +282,7 @@ fn create_ensemble_problem(
     ];
     let variables = vec![
         real_variable(WINDOW, 30.0, 90.0)?,
-        real_variable(MIN_RESIDUAL, 1.0, 100.0)?,
+        real_variable(MIN_RESIDUAL_RATIO, 0.0, 1.0)?,
         // The original LOF search used 0.05 as its lower efficiency bound.
         // Since efficiency is shared, use the intersection of member ranges.
         real_variable(EFFICIENCY, 0.05, 0.1)?,
@@ -413,7 +414,9 @@ fn parameter_values(individual: &Individual) -> Result<[f64; 5], Box<dyn Error>>
         individual.get_variable_value(WINDOW)?.as_real()?,
         individual.get_variable_value(Z)?.as_real()?,
         individual.get_variable_value(K)?.as_real()?,
-        individual.get_variable_value(MIN_RESIDUAL)?.as_real()?,
+        individual
+            .get_variable_value(MIN_RESIDUAL_RATIO)?
+            .as_real()?,
         individual.get_variable_value(EFFICIENCY)?.as_real()?,
     ])
 }
@@ -421,7 +424,9 @@ fn parameter_values(individual: &Individual) -> Result<[f64; 5], Box<dyn Error>>
 fn ensemble_parameter_values(individual: &Individual) -> Result<[f64; 7], Box<dyn Error>> {
     Ok([
         individual.get_variable_value(WINDOW)?.as_real()?,
-        individual.get_variable_value(MIN_RESIDUAL)?.as_real()?,
+        individual
+            .get_variable_value(MIN_RESIDUAL_RATIO)?
+            .as_real()?,
         individual.get_variable_value(EFFICIENCY)?.as_real()?,
         individual.get_variable_value(Z)?.as_real()?,
         individual.get_variable_value(K)?.as_real()?,
@@ -538,14 +543,14 @@ mod tests {
         let series = observations(&[
             8.0, 9.0, 10.0, 11.0, 12.0, 9.0, 10.0, 11.0, 50.0, 45.0, 10.0,
         ]);
-        let raw = [5.0, 2.0, 3.0, 20.0, 0.05];
+        let raw = [5.0, 2.0, 3.0, 0.2, 0.05];
 
         let objectives = evaluate_parameters(&series, raw);
         let direct = ChebyshevDetector::new(DetectorParameters {
             window: 5,
             z: 2.0,
             k: 3.0,
-            min_residual: 20.0,
+            min_residual_ratio: 0.2,
             efficiency: 0.05,
         })
         .detect(&series);
@@ -566,7 +571,7 @@ mod tests {
         let mut values: Vec<f64> = (0..90).map(|index| 8.0 + (index % 5) as f64).collect();
         values.extend([100.0, 90.0, 10.0]);
         let series = observations(&values);
-        let raw = [60.0, 5.0, 0.05, 4.0, 6.0, 0.8, 1.5];
+        let raw = [60.0, 0.05, 0.05, 4.0, 6.0, 0.8, 1.5];
 
         let objectives = evaluate_ensemble_parameters(&series, raw);
         let direct = EnsembleDetector::new(ensemble_parameters(raw)).detect(&series);
@@ -602,7 +607,7 @@ mod tests {
         for solution in result.solutions {
             let parameters = ensemble_parameters(solution.0);
             assert!((30..=90).contains(&parameters.window));
-            assert!((1.0..=100.0).contains(&parameters.min_residual));
+            assert!((0.0..=1.0).contains(&parameters.min_residual_ratio));
             assert!((0.05..=0.1).contains(&parameters.efficiency));
             assert!((3.0..=5.0).contains(&parameters.chebyshev_z));
             assert!((5.0..=18.0).contains(&parameters.chebyshev_k));
@@ -709,7 +714,7 @@ mod tests {
 
         assert!(!result.solutions.is_empty());
         for solution in result.solutions {
-            let parameters = detector_parameters(solution.0);
+            let parameters = chebyshev_parameters(solution.0);
             let detection = ChebyshevDetector::new(parameters).detect(&series);
             assert_eq!(
                 label_coverage(

@@ -22,7 +22,7 @@ FIXED_PARAMETERS: dict[str, Any] = {
     "lof": [60, 1.5, 5, 0.05],
     "ensemble": {
         "window": 60,
-        "min_residual": 5,
+        "min_residual_ratio": 0.05,
         "efficiency": 0.05,
         "chebyshev_z": 4,
         "chebyshev_k": 6,
@@ -198,6 +198,23 @@ def main() -> None:
         jobs = []
         for country, (input_path, observations, zeros) in input_details.items():
             for algorithm in arguments.algorithms:
+                if algorithm == "ensemble" and observations == zeros:
+                    results.append(
+                        Result(
+                            country,
+                            algorithm,
+                            observations,
+                            zeros,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            "skipped",
+                            "all-zero series",
+                        )
+                    )
+                    continue
                 parameter_path = (
                     arguments.chebyshev_parameters / f"{country}.json"
                     if algorithm == "chebyshev"

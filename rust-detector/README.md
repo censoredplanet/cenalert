@@ -23,7 +23,7 @@ The current implementation includes:
 - standalone Chebyshev, Isolation Forest, and Local Outlier Factor detectors
   behind a common `Detector` trait;
 - a three-detector majority-vote ensemble with a shared window, Croston
-  configuration, minimum residual, and efficiency threshold;
+  configuration, residual ratio, and efficiency threshold;
 - the production anomaly state machine and window feedback behavior;
 - anomaly interval and metadata output;
 - parallel NSGA-II parameter tuning;
@@ -50,8 +50,29 @@ cargo run --release -- \
   --parameters /path/to/parameters.json
 ```
 
-Local Outlier Factor uses the paper-compatible four-element parameter order
-`[window, min_score, min_residual, efficiency]`:
+Newly selected Chebyshev parameters use a named JSON object:
+
+```json
+{
+  "window": 60,
+  "z": 4,
+  "k": 6,
+  "min_residual_ratio": 0.05,
+  "efficiency": 0.05
+}
+```
+
+Local Outlier Factor accepts the same shared fields plus its own score
+threshold:
+
+```json
+{
+  "window": 60,
+  "min_score": 1.5,
+  "min_residual_ratio": 0.05,
+  "efficiency": 0.05
+}
+```
 
 ```bash
 cargo run --release -- \
@@ -61,7 +82,7 @@ cargo run --release -- \
   --parameters /path/to/lof-parameters.json
 ```
 
-Isolation Forest uses the same four-element order:
+Isolation Forest uses the same fields:
 
 ```bash
 cargo run --release -- \
@@ -86,7 +107,7 @@ parameters:
 ```json
 {
   "window": 60,
-  "min_residual": 5,
+  "min_residual_ratio": 0.05,
   "efficiency": 0.05,
   "chebyshev_z": 4,
   "chebyshev_k": 6,
@@ -106,6 +127,13 @@ cargo run --release -- \
 The ensemble's reported threshold is the minimum of its three member
 thresholds. Sparse observations use the single shared
 Croston path rather than voting three times.
+
+The Croston residual ratio is `(value - forecast) / time_series_maximum` and
+must be in `[0, 1]`. This makes sparse detection invariant to multiplicative
+rescaling and removes the need to update an absolute residual threshold when
+Google Trends introduces a new maximum. Legacy paper arrays and the previous
+ensemble object with `min_residual` are still accepted; their residual on the
+normalized `[0, 100]` scale is divided by 100 when loaded.
 
 The command prints JSON containing the normalized input summary, detector
 parameters, scale factor, and detected anomaly intervals. Each anomaly contains
@@ -138,12 +166,13 @@ changed for experiments with `--k-min` and `--k-max`.
 For the ensemble, add `--algorithm ensemble`. One seven-dimensional candidate
 jointly tunes:
 
-1. the window, minimum residual, and efficiency shared by all three members;
+1. the window, residual ratio, and efficiency shared by all three members;
 2. the Chebyshev Z and K thresholds;
 3. the Isolation Forest and LOF minimum scores.
 
 The ranges come from the paper's individual detector searches. Because
 efficiency is shared, its ensemble range is the common `0.05–0.1` interval.
+The residual-ratio range is `[0, 1]`.
 
 ```bash
 cargo run --release -- \
@@ -157,7 +186,7 @@ cargo run --release -- \
 ```
 
 Each ensemble Pareto solution has the same `[parameters, objectives]` shape as
-the Chebyshev output. Its parameter order is `window`, `min_residual`,
+the Chebyshev output. Its parameter order is `window`, `min_residual_ratio`,
 `efficiency`, `chebyshev_z`, `chebyshev_k`,
 `isolation_forest_min_score`, and `lof_min_score`.
 
@@ -311,9 +340,8 @@ cargo run --release -- \
   --left-position 3
 ```
 
-Chebyshev selection writes the paper-compatible five-element array. Ensemble
-selection writes the named parameter object accepted by
-`detect --algorithm ensemble`.
+Selection writes a named parameter object accepted directly by `detect` for
+the selected algorithm.
 Together, the three subcommands provide this local workflow:
 
 ```text
@@ -327,8 +355,7 @@ cargo fmt --all -- --check
 cargo check --all-targets --all-features
 cargo test --all-targets --all-features
 cargo clippy --all-targets --all-features -- -D warnings
-python3 -m py_compile scripts/build_labels.py
-python3 -m py_compile scripts/batch_parity.py
+python3 -m compileall -q scripts
 ```
 
 ## Validation
@@ -443,11 +470,13 @@ parity and are not proposed production selections.
 | Chebyshev | 72 | 72 | 72 | 0 |
 | Isolation Forest | 76 | 76 | 57 | 19 |
 | LOF | 76 | 76 | 75 | 1 |
-| Ensemble | 76 | 76 | 68 | 8 |
+| Ensemble | 72 | 72 | 64 | 8 |
 
 Chebyshev skips ER, KP, LR, and ME because their all-zero series have no
-selected paper parameter file; the other three algorithms process and match
-those series with zero anomalies. Across all 300 executed country/algorithm
+selected paper parameter file. Ensemble parity also skips these all-zero
+series because the Python reference does not initialize a Croston forecast for
+them; the standalone outlier detectors process and match them with zero
+anomalies. Across all 296 executed country/algorithm
 runs, Rust and Python have identical anomaly counts, start dates, end dates,
 and peak dates. The 28 remaining report mismatches are impact values only:
 Isolation Forest's stepwise score can make the two bounded optimizers choose

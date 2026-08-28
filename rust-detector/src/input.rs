@@ -74,6 +74,39 @@ struct DashboardRecord {
     topic: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum DetectorParameterInput {
+    Legacy(Vec<f64>),
+    Ratio(DetectorParameters),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OutlierParameterInput {
+    Legacy(Vec<f64>),
+    Ratio(OutlierDetectorParameters),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyEnsembleParameters {
+    window: usize,
+    min_residual: f64,
+    efficiency: f64,
+    chebyshev_z: f64,
+    chebyshev_k: f64,
+    isolation_forest_min_score: f64,
+    lof_min_score: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum EnsembleParameterInput {
+    Ratio(EnsembleParameters),
+    Legacy(LegacyEnsembleParameters),
+}
+
 /// Parses and normalizes a Dashboard-exported JSON array.
 ///
 /// Records are sorted chronologically. Duplicate dates are rejected because
@@ -107,135 +140,193 @@ pub fn parse_dashboard_json<R: Read>(reader: R) -> Result<Vec<Observation>, Inpu
     Ok(observations)
 }
 
-/// Parses the five-element parameter arrays stored by `cenalert-paper`.
+/// Parses current ratio parameter objects or legacy arrays from `cenalert-paper`.
 ///
-/// Array order: `[window, z, k, min_residual, efficiency]`.
+/// Legacy array order is `[window, z, k, min_residual, efficiency]`; its
+/// residual in the normalized `[0, 100]` scale is divided by 100.
 pub fn parse_parameters_json<R: Read>(reader: R) -> Result<DetectorParameters, InputError> {
-    let values: Vec<f64> = serde_json::from_reader(reader)?;
-    if values.len() != 5 {
-        return Err(InputError::InvalidParameters(format!(
-            "expected 5 values, found {}",
-            values.len()
-        )));
-    }
-    if values.iter().any(|value| !value.is_finite()) {
-        return Err(InputError::InvalidParameters(
-            "all values must be finite".to_owned(),
-        ));
-    }
+    let input: DetectorParameterInput = serde_json::from_reader(reader)?;
+    let parameters = match input {
+        DetectorParameterInput::Ratio(parameters) => parameters,
+        DetectorParameterInput::Legacy(values) => {
+            require_length(&values, 5)?;
+            require_finite(&values)?;
+            DetectorParameters {
+                window: rounded_window(values[0], 1)?,
+                z: values[1],
+                k: values[2],
+                min_residual_ratio: values[3] / 100.0,
+                efficiency: values[4],
+            }
+        }
+    };
+    validate_detector_parameters(parameters)
+}
 
-    // Match Python's `round()` used by `run_cenalert.py`, including its
-    // round-half-to-even behavior.
-    let rounded_window = values[0].round_ties_even();
-    if rounded_window < 1.0 || rounded_window > usize::MAX as f64 {
+/// Parses current ratio parameter objects or legacy paper-compatible arrays.
+pub fn parse_outlier_parameters_json<R: Read>(
+    reader: R,
+) -> Result<OutlierDetectorParameters, InputError> {
+    let input: OutlierParameterInput = serde_json::from_reader(reader)?;
+    let parameters = match input {
+        OutlierParameterInput::Ratio(parameters) => parameters,
+        OutlierParameterInput::Legacy(values) => {
+            require_length(&values, 4)?;
+            require_finite(&values)?;
+            OutlierDetectorParameters {
+                window: rounded_window(values[0], 2)?,
+                min_score: values[1],
+                min_residual_ratio: values[2] / 100.0,
+                efficiency: values[3],
+            }
+        }
+    };
+    validate_outlier_parameters(parameters)
+}
+
+/// Parses current ratio parameters or the previous ensemble object format.
+pub fn parse_ensemble_parameters_json<R: Read>(
+    reader: R,
+) -> Result<EnsembleParameters, InputError> {
+    let input: EnsembleParameterInput = serde_json::from_reader(reader)?;
+    let parameters = match input {
+        EnsembleParameterInput::Ratio(parameters) => parameters,
+        EnsembleParameterInput::Legacy(parameters) => EnsembleParameters {
+            window: parameters.window,
+            min_residual_ratio: parameters.min_residual / 100.0,
+            efficiency: parameters.efficiency,
+            chebyshev_z: parameters.chebyshev_z,
+            chebyshev_k: parameters.chebyshev_k,
+            isolation_forest_min_score: parameters.isolation_forest_min_score,
+            lof_min_score: parameters.lof_min_score,
+        },
+    };
+    validate_ensemble_parameters(parameters)
+}
+
+fn validate_detector_parameters(
+    parameters: DetectorParameters,
+) -> Result<DetectorParameters, InputError> {
+    require_finite(&[
+        parameters.z,
+        parameters.k,
+        parameters.min_residual_ratio,
+        parameters.efficiency,
+    ])?;
+    if parameters.window == 0 {
         return Err(InputError::InvalidParameters(
-            "window must round to a positive integer".to_owned(),
+            "window must be positive".to_owned(),
         ));
     }
-    if values[1] <= 0.0 || values[2] <= 0.0 {
+    if parameters.z <= 0.0 || parameters.k <= 0.0 {
         return Err(InputError::InvalidParameters(
             "z and k must be positive".to_owned(),
         ));
     }
-    if values[3] <= 0.0 {
-        return Err(InputError::InvalidParameters(
-            "min_residual must be positive".to_owned(),
-        ));
-    }
-    if !(0.0..1.0).contains(&values[4]) {
-        return Err(InputError::InvalidParameters(
-            "efficiency must be in [0, 1)".to_owned(),
-        ));
-    }
-
-    Ok(DetectorParameters {
-        window: rounded_window as usize,
-        z: values[1],
-        k: values[2],
-        min_residual: values[3],
-        efficiency: values[4],
-    })
+    validate_ratio(parameters.min_residual_ratio)?;
+    validate_efficiency(parameters.efficiency)?;
+    Ok(parameters)
 }
 
-/// Parses paper-compatible `[window, min_score, min_residual, efficiency]` arrays.
-pub fn parse_outlier_parameters_json<R: Read>(
-    reader: R,
+fn validate_outlier_parameters(
+    parameters: OutlierDetectorParameters,
 ) -> Result<OutlierDetectorParameters, InputError> {
-    let values: Vec<f64> = serde_json::from_reader(reader)?;
-    if values.len() != 4 {
-        return Err(InputError::InvalidParameters(format!(
-            "expected 4 values, found {}",
-            values.len()
-        )));
-    }
-    if values.iter().any(|value| !value.is_finite()) {
-        return Err(InputError::InvalidParameters(
-            "all values must be finite".to_owned(),
-        ));
-    }
-    let rounded_window = values[0].round_ties_even();
-    if rounded_window < 2.0 || rounded_window > usize::MAX as f64 {
-        return Err(InputError::InvalidParameters(
-            "window must round to an integer of at least 2".to_owned(),
-        ));
-    }
-    if values[1] <= 0.0 || values[2] <= 0.0 {
-        return Err(InputError::InvalidParameters(
-            "min_score and min_residual must be positive".to_owned(),
-        ));
-    }
-    if !(0.0..1.0).contains(&values[3]) {
-        return Err(InputError::InvalidParameters(
-            "efficiency must be in [0, 1)".to_owned(),
-        ));
-    }
-    Ok(OutlierDetectorParameters {
-        window: rounded_window as usize,
-        min_score: values[1],
-        min_residual: values[2],
-        efficiency: values[3],
-    })
-}
-
-/// Parses the named parameter object used by the three-detector ensemble.
-pub fn parse_ensemble_parameters_json<R: Read>(
-    reader: R,
-) -> Result<EnsembleParameters, InputError> {
-    let parameters: EnsembleParameters = serde_json::from_reader(reader)?;
-    let values = [
-        parameters.min_residual,
+    require_finite(&[
+        parameters.min_score,
+        parameters.min_residual_ratio,
         parameters.efficiency,
-        parameters.chebyshev_z,
-        parameters.chebyshev_k,
-        parameters.isolation_forest_min_score,
-        parameters.lof_min_score,
-    ];
-    if values.iter().any(|value| !value.is_finite()) {
-        return Err(InputError::InvalidParameters(
-            "all values must be finite".to_owned(),
-        ));
-    }
+    ])?;
     if parameters.window < 2 {
         return Err(InputError::InvalidParameters(
             "window must be at least 2".to_owned(),
         ));
     }
-    if parameters.min_residual <= 0.0
-        || parameters.chebyshev_z <= 0.0
+    if parameters.min_score <= 0.0 {
+        return Err(InputError::InvalidParameters(
+            "min_score must be positive".to_owned(),
+        ));
+    }
+    validate_ratio(parameters.min_residual_ratio)?;
+    validate_efficiency(parameters.efficiency)?;
+    Ok(parameters)
+}
+
+fn validate_ensemble_parameters(
+    parameters: EnsembleParameters,
+) -> Result<EnsembleParameters, InputError> {
+    require_finite(&[
+        parameters.min_residual_ratio,
+        parameters.efficiency,
+        parameters.chebyshev_z,
+        parameters.chebyshev_k,
+        parameters.isolation_forest_min_score,
+        parameters.lof_min_score,
+    ])?;
+    if parameters.window < 2 {
+        return Err(InputError::InvalidParameters(
+            "window must be at least 2".to_owned(),
+        ));
+    }
+    if parameters.chebyshev_z <= 0.0
         || parameters.chebyshev_k <= 0.0
         || parameters.isolation_forest_min_score <= 0.0
         || parameters.lof_min_score <= 0.0
     {
         return Err(InputError::InvalidParameters(
-            "detector thresholds must be positive".to_owned(),
+            "detector score thresholds must be positive".to_owned(),
         ));
     }
-    if !(0.0..1.0).contains(&parameters.efficiency) {
+    validate_ratio(parameters.min_residual_ratio)?;
+    validate_efficiency(parameters.efficiency)?;
+    Ok(parameters)
+}
+
+fn require_length(values: &[f64], expected: usize) -> Result<(), InputError> {
+    if values.len() != expected {
+        return Err(InputError::InvalidParameters(format!(
+            "expected {expected} values, found {}",
+            values.len()
+        )));
+    }
+    Ok(())
+}
+
+fn require_finite(values: &[f64]) -> Result<(), InputError> {
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(InputError::InvalidParameters(
+            "all values must be finite".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn rounded_window(value: f64, minimum: usize) -> Result<usize, InputError> {
+    require_finite(&[value])?;
+    let rounded = value.round_ties_even();
+    if rounded < minimum as f64 || rounded > usize::MAX as f64 {
+        return Err(InputError::InvalidParameters(format!(
+            "window must round to an integer of at least {minimum}"
+        )));
+    }
+    Ok(rounded as usize)
+}
+
+fn validate_ratio(value: f64) -> Result<(), InputError> {
+    if !(0.0..=1.0).contains(&value) {
+        return Err(InputError::InvalidParameters(
+            "min_residual_ratio must be in [0, 1]".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_efficiency(value: f64) -> Result<(), InputError> {
+    if !(0.0..1.0).contains(&value) {
         return Err(InputError::InvalidParameters(
             "efficiency must be in [0, 1)".to_owned(),
         ));
     }
-    Ok(parameters)
+    Ok(())
 }
 
 fn parse_date(value: &str) -> Result<NaiveDate, InputError> {
@@ -327,8 +418,23 @@ mod tests {
         assert_eq!(parameters.window, 90);
         assert_eq!(parameters.z, 4.371769582031636);
         assert_eq!(parameters.k, 6.053424084413223);
-        assert_eq!(parameters.min_residual, 74.88743438197304);
+        assert_eq!(parameters.min_residual_ratio, 0.7488743438197304);
         assert_eq!(parameters.efficiency, 0.05135053360365411);
+    }
+
+    #[test]
+    fn parses_current_ratio_parameter_object() {
+        let input = br#"{
+            "window": 60,
+            "z": 4,
+            "k": 6,
+            "min_residual_ratio": 0.05,
+            "efficiency": 0.05
+        }"#;
+
+        let parameters = parse_parameters_json(input.as_slice()).unwrap();
+
+        assert_eq!(parameters.min_residual_ratio, 0.05);
     }
 
     #[test]
@@ -355,7 +461,7 @@ mod tests {
 
         assert_eq!(parameters.window, 60);
         assert_eq!(parameters.min_score, 1.5);
-        assert_eq!(parameters.min_residual, 5.0);
+        assert_eq!(parameters.min_residual_ratio, 0.05);
         assert_eq!(parameters.efficiency, 0.05);
     }
 
@@ -372,6 +478,39 @@ mod tests {
         }"#;
         let parameters = parse_ensemble_parameters_json(input.as_slice()).unwrap();
         assert_eq!(parameters.window, 60);
+        assert_eq!(parameters.min_residual_ratio, 0.05);
         assert_eq!(parameters.lof_min_score, 1.5);
+    }
+
+    #[test]
+    fn parses_current_ensemble_ratio_object() {
+        let input = br#"{
+            "window": 60,
+            "min_residual_ratio": 0,
+            "efficiency": 0.05,
+            "chebyshev_z": 4,
+            "chebyshev_k": 6,
+            "isolation_forest_min_score": 0.8,
+            "lof_min_score": 1.5
+        }"#;
+
+        let parameters = parse_ensemble_parameters_json(input.as_slice()).unwrap();
+
+        assert_eq!(parameters.min_residual_ratio, 0.0);
+    }
+
+    #[test]
+    fn rejects_residual_ratios_above_one() {
+        let input = br#"{
+            "window": 60,
+            "z": 4,
+            "k": 6,
+            "min_residual_ratio": 1.01,
+            "efficiency": 0.05
+        }"#;
+
+        let error = parse_parameters_json(input.as_slice()).unwrap_err();
+
+        assert!(error.to_string().contains("[0, 1]"));
     }
 }

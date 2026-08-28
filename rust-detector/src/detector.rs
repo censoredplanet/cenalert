@@ -39,7 +39,7 @@ impl Detector for ChebyshevDetector {
         run_detector(
             observations,
             self.parameters.window,
-            self.parameters.min_residual,
+            self.parameters.min_residual_ratio,
             self.parameters.efficiency,
             ChebyshevScorer::new(self.parameters),
         )
@@ -102,11 +102,21 @@ impl DenseScorer for ChebyshevScorer {
 pub(crate) fn run_detector<S: DenseScorer>(
     observations: &[Observation],
     window: usize,
-    min_residual: f64,
+    min_residual_ratio: f64,
     efficiency: f64,
     scorer: S,
 ) -> DetectionResult {
-    let mut state = DetectorState::new(window, min_residual, efficiency, scorer);
+    let series_maximum = observations
+        .iter()
+        .map(|observation| observation.value)
+        .fold(0.0, f64::max);
+    let mut state = DetectorState::new(
+        window,
+        min_residual_ratio,
+        series_maximum,
+        efficiency,
+        scorer,
+    );
     let mut annotated: Vec<AnnotatedObservation> =
         observations.iter().map(AnnotatedObservation::new).collect();
 
@@ -124,7 +134,8 @@ pub(crate) fn run_detector<S: DenseScorer>(
 }
 
 struct DetectorState<S> {
-    min_residual: f64,
+    min_residual_ratio: f64,
+    series_maximum: f64,
     efficiency: f64,
     scorer: S,
     window: SlidingWindow,
@@ -136,10 +147,17 @@ struct DetectorState<S> {
 }
 
 impl<S: DenseScorer> DetectorState<S> {
-    fn new(window: usize, min_residual: f64, efficiency: f64, scorer: S) -> Self {
+    fn new(
+        window: usize,
+        min_residual_ratio: f64,
+        series_maximum: f64,
+        efficiency: f64,
+        scorer: S,
+    ) -> Self {
         let minimum_score = scorer.initial_minimum_score();
         Self {
-            min_residual,
+            min_residual_ratio,
+            series_maximum,
             efficiency,
             scorer,
             window: SlidingWindow::new(window),
@@ -183,6 +201,7 @@ impl<S: DenseScorer> DetectorState<S> {
         };
         let mut residual = score;
         let mut forecast = 0.0;
+        let mut residual_ratio = None;
         if value > 0.0 && sparse {
             if !self.active_anomaly {
                 self.croston_forecast = Some(self.window.croston_sba_forecast());
@@ -193,6 +212,7 @@ impl<S: DenseScorer> DetectorState<S> {
                 self.croston_forecast.unwrap_or(0.0)
             };
             residual = value - forecast;
+            residual_ratio = (self.series_maximum > 0.0).then_some(residual / self.series_maximum);
         } else if value > 0.0 {
             if previous_category.is_some_and(is_sparse) {
                 self.window.winsorize_upper_five_percent();
@@ -202,10 +222,11 @@ impl<S: DenseScorer> DetectorState<S> {
             self.minimum_score = result.minimum_score;
         }
 
-        let new_anomaly =
-            !self.active_anomaly && (score >= self.minimum_score || residual >= self.min_residual);
+        let residual_anomaly = residual_ratio.is_some_and(|ratio| ratio >= self.min_residual_ratio);
+        let residual_normal = residual_ratio.is_some_and(|ratio| ratio < self.min_residual_ratio);
+        let new_anomaly = !self.active_anomaly && (score >= self.minimum_score || residual_anomaly);
         let return_to_normal = self.active_anomaly
-            && (score < self.minimum_score || residual < self.min_residual || value.abs() <= 1e-8);
+            && (score < self.minimum_score || residual_normal || value.abs() <= 1e-8);
         let new_normal =
             self.active_anomaly && efficiency_ratio(&self.efficiency_values) < self.efficiency;
 
@@ -216,7 +237,7 @@ impl<S: DenseScorer> DetectorState<S> {
         if new_anomaly {
             self.intermittent_anomaly = sparse;
             threshold = Some(if self.intermittent_anomaly {
-                forecast + self.min_residual
+                forecast + self.min_residual_ratio * self.series_maximum
             } else {
                 self.scorer.threshold(&mut self.window, value)
             });
@@ -407,7 +428,7 @@ mod tests {
             window,
             z: 2.0,
             k: 3.0,
-            min_residual: 5.0,
+            min_residual_ratio: 0.2,
             efficiency: 0.05,
         }
     }
@@ -421,7 +442,7 @@ mod tests {
         let mut detector_parameters = parameters(5);
         // Avoid the sparse residual path during the synthetic first
         // interarrival; this test isolates the dense score path.
-        detector_parameters.min_residual = 20.0;
+        detector_parameters.min_residual_ratio = 0.4;
         let result = ChebyshevDetector::new(detector_parameters).detect(&observations(&values));
 
         assert_eq!(result.anomalies.len(), 1);
@@ -459,11 +480,41 @@ mod tests {
     }
 
     #[test]
+    fn sparse_detection_is_invariant_to_series_scaling() {
+        let values = [0.0, 20.0, 0.0, 0.0, 20.0, 0.0, 0.0, 20.0, 100.0, 0.0, 20.0];
+        let scaled: Vec<f64> = values.iter().map(|value| value * 10.0).collect();
+        let parameters = DetectorParameters {
+            min_residual_ratio: 0.2,
+            ..parameters(4)
+        };
+
+        let original = ChebyshevDetector::new(parameters).detect(&observations(&values));
+        let rescaled = ChebyshevDetector::new(parameters).detect(&observations(&scaled));
+
+        assert_eq!(original.anomalies.len(), 1);
+        assert_eq!(original.anomalies, rescaled.anomalies);
+    }
+
+    #[test]
+    fn zero_residual_ratio_requires_an_actual_sparse_residual() {
+        let values = [0.0; 12];
+        let parameters = DetectorParameters {
+            min_residual_ratio: 0.0,
+            ..parameters(4)
+        };
+
+        let result = ChebyshevDetector::new(parameters).detect(&observations(&values));
+
+        assert!(result.anomalies.is_empty());
+    }
+
+    #[test]
     fn rebuilds_sparse_window_when_both_end_conditions_hold() {
         let detector_parameters = parameters(4);
         let mut state = DetectorState::new(
             detector_parameters.window,
-            detector_parameters.min_residual,
+            detector_parameters.min_residual_ratio,
+            20.0,
             detector_parameters.efficiency,
             ChebyshevScorer::new(detector_parameters),
         );

@@ -22,14 +22,14 @@ impl Detector for EnsembleDetector {
         run_detector(
             observations,
             parameters.window,
-            parameters.min_residual,
+            parameters.min_residual_ratio,
             parameters.efficiency,
             EnsembleScorer {
                 chebyshev: ChebyshevScorer::new(DetectorParameters {
                     window: parameters.window,
                     z: parameters.chebyshev_z,
                     k: parameters.chebyshev_k,
-                    min_residual: parameters.min_residual,
+                    min_residual_ratio: parameters.min_residual_ratio,
                     efficiency: parameters.efficiency,
                 }),
                 isolation_forest: IsolationForestScorer {
