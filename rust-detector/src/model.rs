@@ -60,6 +60,7 @@ pub struct AnnotatedObservation {
     pub coefficient_of_variation_squared: Option<f64>,
     pub average_interdemand_interval: Option<f64>,
     pub demand_category: Option<DemandCategory>,
+    pub ensemble_vote: Option<EnsembleVote>,
 }
 
 impl AnnotatedObservation {
@@ -75,11 +76,38 @@ impl AnnotatedObservation {
             coefficient_of_variation_squared: None,
             average_interdemand_interval: None,
             demand_category: None,
+            ensemble_vote: None,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnsembleMemberVote {
+    pub score: Option<f64>,
+    pub minimum_score: f64,
+    pub voted: bool,
+}
+
+impl EnsembleMemberVote {
+    pub(crate) fn new(score: f64, minimum_score: f64) -> Self {
+        Self {
+            score: score.is_finite().then_some(score),
+            minimum_score,
+            voted: score >= minimum_score,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnsembleVote {
+    pub vote_count: u8,
+    pub required_votes: u8,
+    pub chebyshev: EnsembleMemberVote,
+    pub isolation_forest: EnsembleMemberVote,
+    pub lof: EnsembleMemberVote,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Anomaly {
     pub start: NaiveDate,
     pub end: NaiveDate,
@@ -87,6 +115,8 @@ pub struct Anomaly {
     pub score: f64,
     pub residual: f64,
     pub impact: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ensemble_vote: Option<EnsembleVote>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

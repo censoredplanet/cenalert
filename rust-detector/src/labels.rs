@@ -256,6 +256,7 @@ mod tests {
             score: 1.0,
             residual: 0.0,
             impact: 1.0,
+            ensemble_vote: None,
         }
     }
 

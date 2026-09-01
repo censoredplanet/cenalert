@@ -2,6 +2,7 @@ mod chebyshev;
 mod croston;
 mod detector;
 mod ensemble;
+pub mod filters;
 pub mod input;
 mod isolation_forest;
 pub mod labels;
@@ -16,6 +17,10 @@ pub use chebyshev::{chebyshev_score, ChebyshevScore};
 pub use croston::croston_sba_forecast;
 pub use detector::{ChebyshevDetector, Detector};
 pub use ensemble::EnsembleDetector;
+pub use filters::{
+    apply_anomaly_filters, AnomalyFilter, DiscardedAnomaly, FilterContext, FilterStageSummary,
+    FilteringResult, MinimumLabeledImpactFilter,
+};
 pub use input::{
     parse_dashboard_json, parse_ensemble_parameters_json, parse_outlier_parameters_json,
     parse_parameters_json, InputError,
@@ -27,8 +32,8 @@ pub use labels::{
 };
 pub use lof::{local_outlier_factor_score, LocalOutlierFactorDetector};
 pub use model::{
-    AnnotatedObservation, Anomaly, DetectionResult, DetectorParameters, EnsembleParameters,
-    Observation, OutlierDetectorParameters,
+    AnnotatedObservation, Anomaly, DetectionResult, DetectorParameters, EnsembleMemberVote,
+    EnsembleParameters, EnsembleVote, Observation, OutlierDetectorParameters,
 };
 pub use selection::{
     select_ensemble_nth_from_left, select_ensemble_parameters, select_nth_from_left,

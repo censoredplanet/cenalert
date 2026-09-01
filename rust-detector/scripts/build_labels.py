@@ -383,11 +383,11 @@ def main() -> None:
     manual_count = len(labels)
     if arguments.community_events:
         labels.extend(derive_automatic_labels(arguments))
+    labels = semantic_deduplicate(labels)
     labels, cross_country_count = apply_cross_country_matches(
         labels, arguments.cross_country_matches
     )
     labels, excluded_count = apply_exclusions(labels, arguments.exclusions)
-    labels = semantic_deduplicate(labels)
     report_same_day_events(labels)
 
     arguments.output.parent.mkdir(parents=True, exist_ok=True)

@@ -170,6 +170,7 @@ impl DenseScorer for IsolationForestScorer {
         DenseEvaluation {
             score: isolation_forest_score(&window.values(), value),
             minimum_score: self.minimum_score,
+            ensemble_vote: None,
         }
     }
 

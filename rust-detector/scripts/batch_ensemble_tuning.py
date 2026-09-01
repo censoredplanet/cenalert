@@ -44,6 +44,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--threads-per-tuning", type=int, default=1)
     parser.add_argument("--countries", nargs="+", help="Optional country-code subset.")
+    parser.add_argument(
+        "--dataset-description",
+        default="public cenalert-paper <Virtual private network> topic series (2011–2024)",
+        help="Dataset description written to the report.",
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
         "--refresh-diagnostics",
@@ -76,23 +81,44 @@ def country_seed(base_seed: int, country: str) -> int:
     )
 
 
+def source_country(source: Path) -> str:
+    if source.suffix.lower() == ".csv":
+        return source.stem.upper()
+    records = json.loads(source.read_text())
+    countries = {
+        str(record.get("country", "")).strip().upper()
+        for record in records
+        if record.get("country")
+    }
+    if len(countries) != 1:
+        raise ValueError(f"{source} must contain exactly one country")
+    return countries.pop()
+
+
 def convert_series(source: Path, destination: Path, country: str) -> dict[str, Any]:
     observations: list[dict[str, Any]] = []
     zero_count = 0
-    with source.open(newline="", encoding="utf-8-sig") as input_file:
-        for row in csv.DictReader(input_file):
-            value = float(row["value"])
-            zero_count += math.isclose(value, 0.0, abs_tol=1e-12)
-            observations.append(
-                {
-                    "country": country,
-                    "date": row["date"],
-                    "rate": value,
-                    "topic": "012t0g",
-                }
-            )
+    if source.suffix.lower() == ".csv":
+        with source.open(newline="", encoding="utf-8-sig") as input_file:
+            records = list(csv.DictReader(input_file))
+        default_topic = "012t0g"
+    else:
+        records = json.loads(source.read_text())
+        default_topic = "vpn"
+    for row in records:
+        value = float(row.get("rate", row.get("value")))
+        zero_count += math.isclose(value, 0.0, abs_tol=1e-12)
+        observations.append(
+            {
+                "country": country,
+                "date": row["date"][:10],
+                "rate": value,
+                "topic": row.get("topic", default_topic),
+            }
+        )
     if not observations:
         raise ValueError(f"{source} contains no observations")
+    observations.sort(key=lambda observation: observation["date"])
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(observations), encoding="utf-8")
     return {
@@ -106,7 +132,10 @@ def convert_series(source: Path, destination: Path, country: str) -> dict[str, A
 def label_applies(label: dict[str, Any], country: str) -> bool:
     if label["scope"] == "country":
         code = label.get("country_code")
-        return code is None or code.upper() == country
+        additional = [
+            code.upper() for code in label.get("additional_matching_countries", [])
+        ]
+        return code is None or code.upper() == country or country in additional
     affected = [code.upper() for code in label.get("affected_countries", [])]
     return not affected or country in affected
 
@@ -132,7 +161,10 @@ def required_labels(
         for label in labels
         if label["scope"] == "country"
         and label.get("match_mode", "proximity") == "proximity"
-        and label_applies(label, country)
+        and (
+            label.get("country_code") is None
+            or label["country_code"].upper() == country
+        )
         and (date.fromisoformat(label["date"]) - first).days >= -proximity_days
         and (date.fromisoformat(label["date"]) - last).days <= proximity_days
     ]
@@ -207,6 +239,26 @@ def detect(config: Config, input_path: Path, parameter_path: Path) -> dict[str, 
         ]
     )
     return json.loads(completed.stdout)
+
+
+def filter_candidates(
+    config: Config, detection_path: Path, output_path: Path
+) -> dict[str, Any]:
+    run_command(
+        [
+            str(config.rust_binary),
+            "filter",
+            "--input",
+            str(detection_path),
+            "--labels",
+            str(config.labels),
+            "--proximity-days",
+            str(config.proximity_days),
+            "--output",
+            str(output_path),
+        ]
+    )
+    return json.loads(output_path.read_text())
 
 
 def tune(
@@ -320,9 +372,12 @@ def diagnose_infeasible(
 
 
 def run_country(
-    source: Path, config: Config, resume: bool, refresh_diagnostics: bool
+    source: Path,
+    country: str,
+    config: Config,
+    resume: bool,
+    refresh_diagnostics: bool,
 ) -> dict[str, Any]:
-    country = source.stem.upper()
     directory = config.work_directory / country
     result_path = directory / "result.json"
     if resume and result_path.exists():
@@ -368,7 +423,8 @@ def run_country(
         result["required_labels"] = len(required)
         front_path = directory / "pareto-front.json"
         try:
-            tune(config, input_path, front_path, country, constrained=True)
+            if not (resume and front_path.exists()):
+                tune(config, input_path, front_path, country, constrained=True)
         except RuntimeError as error:
             if "detects every label" not in str(error):
                 raise
@@ -379,10 +435,21 @@ def run_country(
         front = json.loads(front_path.read_text())
         knee_parameters = directory / "knee-parameters.json"
         left_parameters = directory / "leftmost-parameters.json"
+        knee_output_path = directory / "knee-output.json"
+        left_output_path = directory / "leftmost-output.json"
         knee_selection = select(config, front_path, knee_parameters)
         select(config, front_path, left_parameters, left_position=1)
-        knee_output = detect(config, input_path, knee_parameters)
-        left_output = detect(config, input_path, left_parameters)
+        if resume and knee_output_path.exists() and left_output_path.exists():
+            knee_output = json.loads(knee_output_path.read_text())
+            left_output = json.loads(left_output_path.read_text())
+        else:
+            knee_output = detect(config, input_path, knee_parameters)
+            left_output = detect(config, input_path, left_parameters)
+            knee_output_path.write_text(json.dumps(knee_output, indent=2) + "\n")
+            left_output_path.write_text(json.dumps(left_output, indent=2) + "\n")
+        filtered = filter_candidates(
+            config, knee_output_path, directory / "notification-candidates.json"
+        )
         knee_anomalies = knee_output["anomalies"]
         left_anomalies = left_output["anomalies"]
         knee_found = not knee_selection.stderr.startswith("no knee found")
@@ -407,6 +474,9 @@ def run_country(
             anomalies_with_applicable_label=len(knee_anomalies) - len(unmatched),
             unmatched_anomalies=unmatched,
             total_impact=sum(anomaly["impact"] for anomaly in knee_anomalies),
+            notification_candidates=len(filtered["anomalies"]),
+            filtered_anomalies=len(filtered["discarded"]),
+            minimum_labeled_impact=filtered["stages"][0].get("impact_threshold"),
         )
         return result
     except Exception as error:  # Keep the country batch running for review.
@@ -445,10 +515,22 @@ def write_outputs(arguments: argparse.Namespace, results: list[dict[str, Any]]) 
             (country_directory / "leftmost-parameters.json").read_text()
         )
     unmatched_rows = []
+    candidate_rows = []
     unpreserved_rows = []
     for result in results:
         for anomaly in result.get("unmatched_anomalies", []):
             unmatched_rows.append({"country": result["country"], **anomaly})
+        if result["status"] == "completed":
+            candidate_path = (
+                arguments.work_directory
+                / result["country"]
+                / "notification-candidates.json"
+            )
+            if candidate_path.exists():
+                candidates = json.loads(candidate_path.read_text())["anomalies"]
+                candidate_rows.extend(
+                    {"country": result["country"], **anomaly} for anomaly in candidates
+                )
         never_detected = {
             (label["date"], label.get("description", ""))
             for label in result.get("labels_never_detected", [])
@@ -473,6 +555,12 @@ def write_outputs(arguments: argparse.Namespace, results: list[dict[str, Any]]) 
         output / "ensemble-tuning-unlabeled-anomalies.csv",
         ["country", "start", "end", "peak", "score", "residual", "impact"],
         unmatched_rows,
+    )
+    candidate_rows.sort(key=lambda row: (row["country"], row["start"]))
+    write_csv(
+        output / "ensemble-notification-candidates.csv",
+        ["country", "start", "end", "peak", "score", "residual", "impact"],
+        candidate_rows,
     )
     selected_parameters = {
         result["country"]: {
@@ -506,12 +594,21 @@ def write_report(
     never_detected = sum(len(result.get("labels_never_detected", [])) for result in results)
     selected_anomalies = sum(result["knee_anomalies"] for result in completed)
     leftmost_anomalies = sum(result["leftmost_anomalies"] for result in completed)
+    notification_candidates = sum(
+        result.get("notification_candidates", 0) for result in completed
+    )
+    filtered_anomalies = sum(result.get("filtered_anomalies", 0) for result in completed)
+    diagnostic_finding = (
+        f"{never_detected} labels received no matches across their country's diagnostic "
+        "unconstrained Pareto front and remain candidates for manual review."
+        if never_detected
+        else "Every reviewed required label was detected by at least one diagnostic solution."
+    )
     lines = [
         "# All-country ensemble tuning report",
         "",
-        "This experiment uses the public `cenalert-paper` `<Virtual private network>` topic",
-        "series (2011–2024). The Dashboard's current `vpn` keyword series falls outside this",
-        "run. These results serve as diagnostics and require validation before production use.",
+        f"Dataset: {arguments.dataset_description}.",
+        "These results serve as diagnostics and require validation before production use.",
         "",
         "## Configuration",
         "",
@@ -533,6 +630,8 @@ def write_report(
         f"- Countries with an interior knee: {knee_found}",
         f"- Countries where knee and leftmost detected different anomalies: {knee_differs}",
         f"- Unmatched anomalies from selected solutions: {len(unmatched)}",
+        f"- Notification candidates after impact filtering: {notification_candidates}",
+        f"- Anomalies removed by impact filtering: {filtered_anomalies}",
         "- Labels missed by each infeasible country's best "
         f"simultaneous-coverage solution: {len(unpreserved)}",
         f"- Of those, labels never detected by any diagnostic Pareto solution: {never_detected}",
@@ -549,8 +648,8 @@ def write_report(
         f"leftmost solution in all {knee_differs} cases. This supports evaluating a label-aware",
         "left-side selection rule. The unsupervised knee requires separate justification.",
         "",
-        "Four labels received no matches across their country's diagnostic unconstrained",
-        "Pareto front. They remain candidates for manual review. A different random seed,",
+        diagnostic_finding,
+        "A different random seed,",
         "larger search, or different Google Trends series could change the result.",
         "",
         "## Labels requiring review",
@@ -571,15 +670,16 @@ def write_report(
             "## Country results",
             "",
             "| Country | Status | Required labels | Covered | Knee anomalies | "
-            "Leftmost anomalies | Knee found | Unmatched |",
-            "| --- | --- | ---: | ---: | ---: | ---: | --- | ---: |",
+            "Leftmost anomalies | Knee found | Unmatched | Candidates | Impact threshold |",
+            "| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |",
         ]
     )
     for result in results:
         lines.append(
             (
                 "| {country} | {status} | {required_labels} | {covered} | "
-                "{knee} | {left} | {knee_found} | {unmatched} |"
+                "{knee} | {left} | {knee_found} | {unmatched} | "
+                "{candidates} | {threshold} |"
             ).format(
                 country=result["country"],
                 status=result["status"],
@@ -592,6 +692,12 @@ def write_report(
                 left=result.get("leftmost_anomalies", ""),
                 knee_found=result.get("knee_found", ""),
                 unmatched=len(result.get("unmatched_anomalies", [])),
+                candidates=result.get("notification_candidates", ""),
+                threshold=(
+                    f"{result['minimum_labeled_impact']:.3f}"
+                    if result.get("minimum_labeled_impact") is not None
+                    else ""
+                ),
             )
         )
     lines.extend(
@@ -619,6 +725,8 @@ def write_report(
             "  without an applicable label",
             "- `ensemble-tuning-selected-parameters.json`: selected and leftmost",
             "  parameters for every feasible country",
+            "- `ensemble-notification-candidates.csv`: anomalies retained by the",
+            "  minimum labeled-impact filter",
             "",
         ]
     )
@@ -630,10 +738,18 @@ def write_report(
 def main() -> None:
     arguments = parse_arguments()
     selected = {country.upper() for country in arguments.countries or []}
-    series = sorted(arguments.series_directory.glob("*.csv"))
+    series = sorted(
+        [
+            *arguments.series_directory.glob("*.csv"),
+            *arguments.series_directory.glob("*.json"),
+        ]
+    )
+    sources = [(path, source_country(path)) for path in series]
+    if len({country for _, country in sources}) != len(sources):
+        raise SystemExit("series directory contains duplicate country inputs")
     if selected:
-        series = [path for path in series if path.stem.upper() in selected]
-    if not series:
+        sources = [(path, country) for path, country in sources if country in selected]
+    if not sources:
         raise SystemExit("no matching country series found")
     arguments.work_directory.mkdir(parents=True, exist_ok=True)
     config = Config(
@@ -652,11 +768,12 @@ def main() -> None:
             executor.submit(
                 run_country,
                 source,
+                country,
                 config,
                 arguments.resume,
                 arguments.refresh_diagnostics,
-            ): source.stem.upper()
-            for source in series
+            ): country
+            for source, country in sources
         }
         for completed, future in enumerate(as_completed(futures), start=1):
             result = future.result()

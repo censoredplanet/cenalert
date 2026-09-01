@@ -24,11 +24,14 @@ The current implementation includes:
   behind a common `Detector` trait;
 - a three-detector majority-vote ensemble with a shared window, Croston
   configuration, residual ratio, and efficiency threshold;
+- per-member ensemble vote metadata for explaining two- and three-vote alerts;
 - the production anomaly state machine and window feedback behavior;
 - anomaly interval and metadata output;
 - parallel NSGA-II parameter tuning;
-- optional event-label constraints for parameter tuning; and
-- Pareto-front knee selection compatible with the paper workflow.
+- optional event-label constraints for parameter tuning;
+- explicit cross-country label attribution without inherited tuning constraints;
+- Pareto-front knee selection compatible with the paper workflow; and
+- composable post-detection filtering for notification candidates.
 
 ## Development environment
 
@@ -138,6 +141,30 @@ normalized `[0, 100]` scale is divided by 100 when loaded.
 The command prints JSON containing the normalized input summary, detector
 parameters, scale factor, and detected anomaly intervals. Each anomaly contains
 its start, end, peak, score, residual, and impact.
+
+Dense ensemble anomalies also contain `ensemble_vote`, which reports the
+Chebyshev, Isolation Forest, and LOF scores, their minimum scores, each voting
+decision, the total vote count, and the two-vote majority requirement. Sparse
+Croston anomalies have no member-vote object because they use the shared sparse
+path.
+
+## Filter notification candidates
+
+The `filter` subcommand applies composable post-detection filters. Its first
+filter derives a per-country impact threshold from the lowest-impact anomaly
+that matches an applicable label. It retains anomalies at or above that
+threshold and records discarded anomalies with the filter decision. When none
+of the country's detected anomalies matches a label, the threshold is
+unavailable and all anomalies are retained.
+
+```bash
+cargo run --release -- \
+  filter \
+  --input /path/to/detection-output.json \
+  --labels /path/to/labels.json \
+  --proximity-days 3 \
+  --output /path/to/notification-candidates.json
+```
 
 ## Tune parameters
 
@@ -331,12 +358,18 @@ attribution, while the event constrains tuning only for its owning
 ### Run all-country ensemble tuning
 
 `scripts/batch_ensemble_tuning.py` runs the complete constrained workflow for
-each country CSV: tune, select the knee or documented leftmost fallback, run
+each country series: tune, select the knee or documented leftmost fallback, run
 detection, and compare that result with the first Pareto-front solution. For an
 infeasible country, it records labels missed by the best simultaneous-coverage
 unconstrained Pareto solution and distinguishes labels never detected by any
 diagnostic Pareto solution. It also exports anomalies that have no applicable
 country or global label.
+
+The series directory may contain paper-format CSV files or single-country JSON
+exports downloaded from the Dashboard. For each feasible country, the work
+directory retains the knee and leftmost detector outputs plus
+`notification-candidates.json`. The report directory includes a combined
+`ensemble-notification-candidates.csv` after minimum labeled-impact filtering.
 
 The work directory stores intermediate inputs and Pareto fronts so an
 interrupted run can continue with `--resume`. Keep it outside the repository:
@@ -355,12 +388,30 @@ interrupted run can continue with `--resume`. Keep it outside the repository:
   --seed 42
 ```
 
+For current Dashboard exports, point `--series-directory` to the directory of
+All Time JSON files and describe the snapshot in the generated report:
+
+```bash
+.venv/bin/python scripts/batch_ensemble_tuning.py \
+  --series-directory /path/to/dashboard-all-time-json \
+  --labels /tmp/cenalert-labels.json \
+  --rust-binary target/release/cenalert-detector \
+  --output-directory reports/ensemble-tuning-dashboard-current \
+  --work-directory /tmp/cenalert-dashboard-tuning \
+  --evaluations 5000 \
+  --population-size 100 \
+  --workers 10 \
+  --threads-per-tuning 1 \
+  --seed 42 \
+  --dataset-description "CenAlert Dashboard vpn keyword series through YYYY-MM-DD"
+```
+
 Use `--countries RU SS` for a smaller validation run. The Markdown report
 contains the configuration, findings, country summary, labels requiring
 review, and highest-impact unmatched anomalies. A CSV retains the complete
-unmatched-anomaly list, and a JSON file retains selected parameters. Source
-event spreadsheets and full intermediate Pareto fronts remain in their input
-and work locations.
+unmatched-anomaly list, a second CSV retains notification candidates, and a
+JSON file retains selected parameters. Source event spreadsheets and full
+intermediate Pareto fronts remain in their input and work locations.
 
 ## Select parameters
 

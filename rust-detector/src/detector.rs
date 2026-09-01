@@ -1,6 +1,6 @@
 use crate::chebyshev::chebyshev_score_from_sorted;
 use crate::model::{
-    AnnotatedObservation, Anomaly, DetectionResult, DetectorParameters, Observation,
+    AnnotatedObservation, Anomaly, DetectionResult, DetectorParameters, EnsembleVote, Observation,
 };
 use crate::statistics::{efficiency_ratio, mean};
 use crate::window::{DemandCategory, SlidingWindow};
@@ -13,6 +13,7 @@ pub trait Detector {
 pub(crate) struct DenseEvaluation {
     pub score: f64,
     pub minimum_score: f64,
+    pub ensemble_vote: Option<EnsembleVote>,
 }
 
 pub(crate) trait DenseScorer {
@@ -87,6 +88,7 @@ impl DenseScorer for ChebyshevScorer {
         DenseEvaluation {
             score: result.score,
             minimum_score: result.minimum_score,
+            ensemble_vote: None,
         }
     }
 
@@ -202,6 +204,7 @@ impl<S: DenseScorer> DetectorState<S> {
         let mut residual = score;
         let mut forecast = 0.0;
         let mut residual_ratio = None;
+        let mut ensemble_vote = None;
         if value > 0.0 && sparse {
             if !self.active_anomaly {
                 self.croston_forecast = Some(self.window.croston_sba_forecast());
@@ -220,6 +223,7 @@ impl<S: DenseScorer> DetectorState<S> {
             let result = self.scorer.evaluate(&mut self.window, value);
             score = result.score;
             self.minimum_score = result.minimum_score;
+            ensemble_vote = result.ensemble_vote;
         }
 
         let residual_anomaly = residual_ratio.is_some_and(|ratio| ratio >= self.min_residual_ratio);
@@ -281,6 +285,7 @@ impl<S: DenseScorer> DetectorState<S> {
         annotated[index].average_interdemand_interval =
             finite_or_infinite_option(average_interdemand_interval);
         annotated[index].demand_category = Some(category);
+        annotated[index].ensemble_vote = ensemble_vote;
 
         if !self.active_anomaly && value > 0.0 {
             self.window.insert(value, index + 1);
@@ -397,6 +402,7 @@ fn collect_anomalies(annotated: &[AnnotatedObservation]) -> Vec<Anomaly> {
             score: annotated[start_index].score.unwrap_or(f64::NAN),
             residual: annotated[start_index].residual.unwrap_or(f64::NAN),
             impact,
+            ensemble_vote: annotated[start_index].ensemble_vote.clone(),
         });
         index += 1;
     }

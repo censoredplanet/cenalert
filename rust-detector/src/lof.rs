@@ -118,6 +118,7 @@ impl DenseScorer for LocalOutlierFactorScorer {
         DenseEvaluation {
             score,
             minimum_score: self.minimum_score,
+            ensemble_vote: None,
         }
     }
 

@@ -4,15 +4,16 @@ use std::io::{self, BufWriter};
 use std::path::PathBuf;
 
 use cenalert_detector::{
-    parse_dashboard_json, parse_ensemble_parameters_json, parse_labels_json,
+    apply_anomaly_filters, parse_dashboard_json, parse_ensemble_parameters_json, parse_labels_json,
     parse_outlier_parameters_json, parse_parameters_json, select_ensemble_nth_from_left,
     select_ensemble_parameters, select_nth_from_left, select_parameters, tune_chebyshev,
-    tune_ensemble, Anomaly, ChebyshevDetector, DetectionResult, Detector, EnsembleDetector,
-    EnsembleParetoSolution, IsolationForestDetector, LocalOutlierFactorDetector, ParetoSolution,
-    TuningConfig,
+    tune_ensemble, Anomaly, AnomalyFilter, ChebyshevDetector, DetectionResult, Detector,
+    EnsembleDetector, EnsembleParetoSolution, FilterContext, FilteringResult,
+    IsolationForestDetector, LocalOutlierFactorDetector, MinimumLabeledImpactFilter,
+    ParetoSolution, TuningConfig,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Parser)]
 #[command(version, about = "CenAlert anomaly detection and parameter tuning")]
@@ -29,6 +30,8 @@ enum Command {
     Tune(TuneArgs),
     /// Select the preferred tradeoff from an NSGA-II Pareto front.
     Select(SelectArgs),
+    /// Filter detector output into notification candidates.
+    Filter(FilterArgs),
 }
 
 #[derive(Debug, Args)]
@@ -114,6 +117,22 @@ struct SelectArgs {
     left_position: Option<usize>,
 }
 
+#[derive(Debug, Args)]
+struct FilterArgs {
+    /// Detection JSON produced by the detect subcommand.
+    #[arg(long)]
+    input: PathBuf,
+    /// Labels used to derive the per-country impact threshold.
+    #[arg(long)]
+    labels: PathBuf,
+    /// Destination for retained and discarded anomalies.
+    #[arg(long)]
+    output: PathBuf,
+    /// Maximum distance for label attribution.
+    #[arg(long, default_value_t = 3)]
+    proximity_days: u32,
+}
+
 #[derive(Debug, Serialize)]
 struct DetectorOutput<P> {
     algorithm: &'static str,
@@ -125,6 +144,19 @@ struct DetectorOutput<P> {
     parameters: P,
     scale_factor: f64,
     anomalies: Vec<Anomaly>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FilterInput {
+    countries: Vec<String>,
+    anomalies: Vec<Anomaly>,
+}
+
+#[derive(Debug, Serialize)]
+struct FilterOutput {
+    country: String,
+    #[serde(flatten)]
+    result: FilteringResult,
 }
 
 fn main() {
@@ -139,7 +171,28 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         Command::Detect(arguments) => run_detection(arguments),
         Command::Tune(arguments) => run_tuning(arguments),
         Command::Select(arguments) => run_selection(arguments),
+        Command::Filter(arguments) => run_filter(arguments),
     }
+}
+
+fn run_filter(arguments: FilterArgs) -> Result<(), Box<dyn Error>> {
+    let input: FilterInput = serde_json::from_reader(File::open(arguments.input)?)?;
+    let [country] = input.countries.as_slice() else {
+        return Err("filter input must contain exactly one country".into());
+    };
+    let labels = parse_labels_json(File::open(arguments.labels)?)?;
+    let context = FilterContext {
+        labels: &labels,
+        country_code: country,
+        proximity_days: arguments.proximity_days,
+    };
+    let filters: Vec<Box<dyn AnomalyFilter>> = vec![Box::new(MinimumLabeledImpactFilter)];
+    let output = FilterOutput {
+        country: country.clone(),
+        result: apply_anomaly_filters(input.anomalies, &context, &filters),
+    };
+    serde_json::to_writer_pretty(BufWriter::new(File::create(arguments.output)?), &output)?;
+    Ok(())
 }
 
 fn run_selection(arguments: SelectArgs) -> Result<(), Box<dyn Error>> {
@@ -382,6 +435,26 @@ mod tests {
             panic!("expected detect command");
         };
         assert!(matches!(arguments.algorithm, DetectionAlgorithm::Chebyshev));
+    }
+
+    #[test]
+    fn parses_filter_subcommand() {
+        let parsed = Cli::try_parse_from([
+            "cenalert-detector",
+            "filter",
+            "--input",
+            "detected.json",
+            "--labels",
+            "labels.json",
+            "--output",
+            "candidates.json",
+        ])
+        .unwrap();
+
+        let Command::Filter(arguments) = parsed.command else {
+            panic!("expected filter subcommand")
+        };
+        assert_eq!(arguments.proximity_days, 3);
     }
 
     #[test]
