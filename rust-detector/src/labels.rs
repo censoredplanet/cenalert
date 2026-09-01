@@ -43,6 +43,10 @@ pub struct EventLabel {
     pub country_code: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub affected_countries: Vec<String>,
+    /// Additional countries where this country event may be used for attribution.
+    /// These countries do not inherit the event as a tuning constraint.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_matching_countries: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -57,6 +61,7 @@ impl EventLabel {
             match_mode: LabelMatchMode::default(),
             country_code: None,
             affected_countries: Vec::new(),
+            additional_matching_countries: Vec::new(),
             description: None,
             metadata: BTreeMap::new(),
         }
@@ -191,7 +196,7 @@ pub(crate) fn required_country_labels(
         .filter(|label| {
             label.scope == LabelScope::Country
                 && label.match_mode == LabelMatchMode::Proximity
-                && label_applies_to_country(label, country_code)
+                && country_label_constrains_country(label, country_code)
         })
         .cloned()
         .collect()
@@ -199,9 +204,16 @@ pub(crate) fn required_country_labels(
 
 fn label_applies_to_country(label: &EventLabel, country_code: Option<&str>) -> bool {
     match label.scope {
-        LabelScope::Country => label.country_code.as_deref().is_none_or(|label_country| {
-            country_code.is_some_and(|country| country.eq_ignore_ascii_case(label_country))
-        }),
+        LabelScope::Country => {
+            label.country_code.as_deref().is_none_or(|label_country| {
+                country_code.is_some_and(|country| country.eq_ignore_ascii_case(label_country))
+            }) || country_code.is_some_and(|country| {
+                label
+                    .additional_matching_countries
+                    .iter()
+                    .any(|additional| additional.eq_ignore_ascii_case(country))
+            })
+        }
         LabelScope::Global => {
             label.affected_countries.is_empty()
                 || country_code.is_some_and(|country| {
@@ -212,6 +224,12 @@ fn label_applies_to_country(label: &EventLabel, country_code: Option<&str>) -> b
                 })
         }
     }
+}
+
+fn country_label_constrains_country(label: &EventLabel, country_code: Option<&str>) -> bool {
+    label.country_code.as_deref().is_none_or(|label_country| {
+        country_code.is_some_and(|country| country.eq_ignore_ascii_case(label_country))
+    })
 }
 
 fn scope_priority(scope: LabelScope) -> u8 {
@@ -382,5 +400,30 @@ mod tests {
 
         assert!(match_anomaly_to_label(&anomaly, &[global.clone()], Some("RU"), 3).is_some());
         assert!(match_anomaly_to_label(&anomaly, &[global], Some("US"), 3).is_none());
+    }
+
+    #[test]
+    fn country_event_can_match_an_explicit_additional_country() {
+        let anomaly = anomaly("2025-01-10");
+        let mut event = label("2025-01-10", LabelScope::Country);
+        event.country_code = Some("RU".to_owned());
+        event.additional_matching_countries = vec!["UA".to_owned()];
+
+        assert!(match_anomaly_to_label(&anomaly, &[event.clone()], Some("RU"), 3).is_some());
+        assert!(match_anomaly_to_label(&anomaly, &[event.clone()], Some("UA"), 3).is_some());
+        assert!(match_anomaly_to_label(&anomaly, &[event], Some("BR"), 3).is_none());
+    }
+
+    #[test]
+    fn additional_matching_country_does_not_inherit_tuning_constraint() {
+        let mut event = label("2025-01-10", LabelScope::Country);
+        event.country_code = Some("RU".to_owned());
+        event.additional_matching_countries = vec!["UA".to_owned()];
+
+        assert_eq!(
+            required_country_labels(&[event.clone()], Some("RU")),
+            vec![event.clone()]
+        );
+        assert!(required_country_labels(&[event], Some("UA")).is_empty());
     }
 }

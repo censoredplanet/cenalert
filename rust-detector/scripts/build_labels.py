@@ -15,6 +15,17 @@ from typing import Any
 
 
 COUNTRY_SHEETS = ("filtering", "shutdowns", "other")
+EVENT_FIELDS = (
+    "country",
+    "country_code",
+    "affected_regions",
+    "start_date",
+    "end_date",
+    "cause",
+    "affected_services",
+    "link",
+    "source",
+)
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -25,9 +36,21 @@ def parse_arguments() -> argparse.Namespace:
         parser.add_argument(f"--{category}", required=True, type=Path)
     parser.add_argument("--global-events", required=True, type=Path)
     parser.add_argument(
+        "--additional-events",
+        action="append",
+        default=[],
+        type=Path,
+        help="Optional mixed country/global event CSV; may omit the standard header.",
+    )
+    parser.add_argument(
         "--exclusions",
         type=Path,
         help="Optional CSV of country/date/description/category labels to omit.",
+    )
+    parser.add_argument(
+        "--cross-country-matches",
+        type=Path,
+        help="Optional CSV assigning country events to explicit additional countries.",
     )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--community-events", type=Path)
@@ -60,6 +83,24 @@ def read_events(path: Path) -> list[dict[str, str]]:
     missing = required.difference(rows[0] if rows else ())
     if missing:
         raise ValueError(f"{path} is missing columns: {', '.join(sorted(missing))}")
+    return rows
+
+
+def read_additional_events(path: Path) -> list[dict[str, str]]:
+    with path.open(newline="", encoding="utf-8-sig") as event_file:
+        records = list(csv.reader(event_file))
+    if not records:
+        return []
+    if tuple(value.strip() for value in records[0]) == EVENT_FIELDS:
+        records = records[1:]
+    rows = []
+    for row_number, values in enumerate(records, start=1):
+        if len(values) != len(EVENT_FIELDS):
+            raise ValueError(
+                f"{path}:{row_number} has {len(values)} columns; "
+                f"expected {len(EVENT_FIELDS)}"
+            )
+        rows.append(dict(zip(EVENT_FIELDS, values)))
     return rows
 
 
@@ -99,7 +140,72 @@ def load_manual_labels(arguments: argparse.Namespace) -> list[dict[str, Any]]:
             labels.append(normalize_event(row, "country", category, "manual"))
     for row in read_events(arguments.global_events):
         labels.append(normalize_event(row, "global", "global", "manual"))
+    for path in arguments.additional_events:
+        for row in read_additional_events(path):
+            scope = "country" if row["country_code"].strip() else "global"
+            labels.append(normalize_event(row, scope, "additional", "manual"))
     return labels
+
+
+def apply_cross_country_matches(
+    labels: list[dict[str, Any]], rules_path: Path | None
+) -> tuple[list[dict[str, Any]], int]:
+    if rules_path is None:
+        return labels, 0
+    with rules_path.open(newline="", encoding="utf-8-sig") as input_file:
+        reader = csv.DictReader(input_file)
+        required = {
+            "country_code",
+            "start_date",
+            "description",
+            "additional_matching_countries",
+        }
+        missing = required.difference(reader.fieldnames or ())
+        if missing:
+            raise ValueError(
+                f"{rules_path} is missing columns: {', '.join(sorted(missing))}"
+            )
+        rules = list(reader)
+
+    applied = 0
+    for rule in rules:
+        country_code = rule["country_code"].strip().upper()
+        start_date = rule["start_date"].strip()
+        description = rule["description"].strip()
+        date.fromisoformat(start_date)
+        matches = [
+            label
+            for label in labels
+            if label["scope"] == "country"
+            and label.get("country_code", "").upper() == country_code
+            and label["date"] == start_date
+            and label.get("description", "") == description
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"cross-country rule for {country_code} {start_date} matched "
+                f"{len(matches)} labels; expected exactly one"
+            )
+        additional = sorted(
+            {
+                value.strip().upper()
+                for value in rule["additional_matching_countries"].split(";")
+                if value.strip()
+            }
+        )
+        if not additional or any(
+            len(country) != 2 or not country.isalpha() for country in additional
+        ):
+            raise ValueError(
+                f"cross-country rule for {country_code} {start_date} has invalid "
+                "additional country codes"
+            )
+        matches[0]["additional_matching_countries"] = additional
+        reason = rule.get("reason", "").strip()
+        if reason:
+            matches[0]["metadata"]["cross_country_match_reason"] = reason
+        applied += 1
+    return labels, applied
 
 
 def detect_anomaly_starts(
@@ -199,10 +305,16 @@ def report_same_day_events(labels: list[dict[str, Any]]) -> None:
             )
 
 
-def exact_deduplicate(labels: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    unique: dict[str, dict[str, Any]] = {}
+def semantic_deduplicate(labels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for label in labels:
-        unique[json.dumps(label, sort_keys=True)] = label
+        key = (
+            label["scope"],
+            label.get("country_code", "").upper(),
+            label["date"],
+            label.get("description", ""),
+        )
+        unique.setdefault(key, label)
     return sorted(
         unique.values(),
         key=lambda label: (
@@ -271,8 +383,11 @@ def main() -> None:
     manual_count = len(labels)
     if arguments.community_events:
         labels.extend(derive_automatic_labels(arguments))
+    labels, cross_country_count = apply_cross_country_matches(
+        labels, arguments.cross_country_matches
+    )
     labels, excluded_count = apply_exclusions(labels, arguments.exclusions)
-    labels = exact_deduplicate(labels)
+    labels = semantic_deduplicate(labels)
     report_same_day_events(labels)
 
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
@@ -281,7 +396,9 @@ def main() -> None:
     global_count = len(labels) - country_count
     print(
         f"wrote {len(labels)} labels ({country_count} country, {global_count} global); "
-        f"loaded {manual_count} manually verified rows; excluded {excluded_count} rows",
+        f"loaded {manual_count} manually verified rows; "
+        f"added {cross_country_count} cross-country rules; "
+        f"excluded {excluded_count} rows",
         file=sys.stderr,
     )
 

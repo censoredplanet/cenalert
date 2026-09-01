@@ -283,6 +283,7 @@ python3 scripts/build_labels.py \
   --shutdowns ../CenAlert_Shutdowns.csv \
   --other ../CenAlert_Other.csv \
   --global-events ../CenAlert_Global.csv \
+  --additional-events "/path/to/New Labels 20206-08-29.csv" \
   --exclusions config/label-exclusions.csv \
   --community-events ../../cenalert-paper/events/custom/Community.csv \
   --series-directory ../../cenalert-paper/series/012t0g \
@@ -292,8 +293,10 @@ python3 scripts/build_labels.py \
   --output /tmp/cenalert-labels.json
 ```
 
-The CSV inputs and JSON output can remain outside the repository. The builder
-validates required columns and dates, preserves distinct same-day records, and
+The CSV inputs and JSON output can remain outside the repository. Repeat
+`--additional-events` to load reviewed mixed country/global sheets; the
+standard nine-column header is optional for these supplemental files. The
+builder validates columns and dates, preserves distinct same-day records, and
 reports such groups for manual review.
 
 The manually verified sheets are included as provided; the builder does not
@@ -303,11 +306,27 @@ keyword or topic as the input series. A mismatched series can make the
 requirement to preserve every applicable country label infeasible.
 
 `config/label-exclusions.csv` records label-removal decisions without changing
-the source spreadsheets. The current entries exclude six Russia events that
-were not reliably preserved within the agreed search space; one is also a
-duplicate of a global event. The exclusions affect tuning constraints, while a
-detected spike on one of those dates can still appear as an unmatched anomaly
-for later review.
+the source spreadsheets. Excluded events remain in their source data and do
+not become tuning constraints or label matches in the generated file.
+
+When an event should also match specific other countries, pass an optional
+rule CSV through `--cross-country-matches`. Its
+`additional_matching_countries` column contains semicolon-separated ISO codes.
+
+A country label may list `additional_matching_countries` when that event is
+known to affect specific other countries. Those countries may use the event for
+attribution, while the event constrains tuning only for its owning
+`country_code`:
+
+```json
+{
+  "date": "2025-01-01",
+  "scope": "country",
+  "country_code": "RU",
+  "additional_matching_countries": ["UA"],
+  "description": "Example Russia event also relevant to Ukraine"
+}
+```
 
 ### Run all-country ensemble tuning
 

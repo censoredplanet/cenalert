@@ -4,4 +4,7 @@ RU,2017-06-08,Russian lawmakers propose legislation that would ban VPNs that all
 RU,2017-06-26,Russia threatens to ban Telegram after Telegram refuses to hand over encrypted data of terrorist,other,Not reliably preserved within the tuning search space
 RU,2017-07-21,Russia's lower house passes laws banning VPNs enabling censorship circumvention ,other,Not reliably preserved within the tuning search space
 RU,2018-03-29,Telegram server outage,other,Duplicate of a global event and not a country constraint
-RU,2019-04-16,Russia’s lower house approved an Internet isolation law that would enable the creation of a domestic Internet capable of functioning even when disconnected from the global Internet.,other,Not reliably preserved within the tuning search space
+IR,2018-08-06,"Anti-regime protests broke out in Iran on July 31, 2018. To prevent citizens from sharing photos of the demonstrations, authorities shut down Internet and cellular services in the cities of Qom and Karaj on August 6, 2018.",shutdowns,Removed after manual review of the all-country ensemble results
+TR,2016-05-13,Eksi Sozluk,filtering,Removed after manual review of the all-country ensemble results
+UZ,2018-09-04,Facebook,filtering,Retained in the source data but excluded from current tuning constraints
+ZM,2019-08-16,Protests,other,Retained in the source data but excluded from current tuning constraints
