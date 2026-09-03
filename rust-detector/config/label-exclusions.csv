@@ -8,3 +8,8 @@ IR,2018-08-06,"Anti-regime protests broke out in Iran on July 31, 2018. To preve
 TR,2016-05-13,Eksi Sozluk,filtering,Removed after manual review of the all-country ensemble results
 UZ,2018-09-04,Facebook,filtering,Retained in the source data but excluded from current tuning constraints
 ZM,2019-08-16,Protests,other,Retained in the source data but excluded from current tuning constraints
+BI,2019-12-13,YouTube,filtering,Current Dashboard vpn series is zero throughout the matching window; the paper topic series retained a signal
+JO,2018-11-30,Facebook livestreaming interference,community,Current Dashboard vpn series is zero throughout the matching window; the paper topic series retained a signal
+NP,2018-09-21,Pornography,filtering,Current Dashboard vpn series is zero throughout the matching window; the paper topic series retained a signal
+TD,2020-07-22,WhatsApp,community,Current Dashboard vpn series is zero throughout the matching window; the paper topic series retained a signal
+UG,2016-02-18,Social Media,community,Current Dashboard vpn series is zero throughout the matching window; the paper topic series retained a signal
