@@ -47,6 +47,12 @@ def parse_arguments() -> argparse.Namespace:
         default=1,
         help="Maximum normal-day gap for combining sparse anomalies.",
     )
+    parser.add_argument(
+        "--multi-country-threshold",
+        type=int,
+        default=5,
+        help="Distinct countries required to group same-day candidates.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--threads-per-tuning", type=int, default=1)
@@ -71,6 +77,8 @@ def parse_arguments() -> argparse.Namespace:
         parser.error("--proximity-days must be non-negative")
     if arguments.coalesce_sparse_gap_days < 0:
         parser.error("--coalesce-sparse-gap-days must be non-negative")
+    if arguments.multi_country_threshold < 2:
+        parser.error("--multi-country-threshold must be at least 2")
     if arguments.workers < 1 or arguments.threads_per_tuning < 1:
         parser.error("worker and thread counts must be positive")
     return arguments
@@ -587,6 +595,41 @@ def write_outputs(arguments: argparse.Namespace, results: list[dict[str, Any]]) 
         ],
         candidate_rows,
     )
+    candidates_json = output / "ensemble-notification-candidates.json"
+    candidates_json.write_text(json.dumps(candidate_rows, indent=2) + "\n")
+    grouped_output = output / "cross-country-notifications.json"
+    run_command(
+        [
+            str(arguments.rust_binary.resolve()),
+            "group-cross-country",
+            "--input",
+            str(candidates_json.resolve()),
+            "--minimum-countries",
+            str(arguments.multi_country_threshold),
+            "--output",
+            str(grouped_output.resolve()),
+        ]
+    )
+    cross_country = json.loads(grouped_output.read_text())
+    occurrence_rows = [
+        {
+            **occurrence,
+            "countries": ",".join(occurrence["countries"]),
+        }
+        for occurrence in cross_country["same_day_occurrences"]
+    ]
+    write_csv(
+        output / "cross-country-occurrences.csv",
+        [
+            "date",
+            "country_count",
+            "countries",
+            "anomaly_count",
+            "total_impact",
+            "grouped_as_notification",
+        ],
+        occurrence_rows,
+    )
     selected_parameters = {
         result["country"]: {
             "selected": result["selected_parameters"],
@@ -598,7 +641,7 @@ def write_outputs(arguments: argparse.Namespace, results: list[dict[str, Any]]) 
     (output / "ensemble-tuning-selected-parameters.json").write_text(
         json.dumps(selected_parameters, indent=2) + "\n"
     )
-    write_report(arguments, results, unmatched_rows, unpreserved_rows)
+    write_report(arguments, results, unmatched_rows, unpreserved_rows, cross_country)
 
 
 def write_report(
@@ -606,6 +649,7 @@ def write_report(
     results: list[dict[str, Any]],
     unmatched: list[dict[str, Any]],
     unpreserved: list[dict[str, Any]],
+    cross_country: dict[str, Any],
 ) -> None:
     completed = [result for result in results if result["status"] == "completed"]
     statuses = {
@@ -647,6 +691,8 @@ def write_report(
         f"- Label proximity: ±{arguments.proximity_days} days",
         "- Sparse anomaly coalescing: at most "
         f"{arguments.coalesce_sparse_gap_days} normal day(s) between components",
+        "- Cross-country grouping threshold: "
+        f"{arguments.multi_country_threshold} distinct countries on the same start date",
         f"- Base random seed: {arguments.seed} (deterministically offset by country code)",
         "- Constraint: every applicable proximity-mode country label must be detected",
         "- Global and exact-match pseudo-labels are attribution-only",
@@ -663,6 +709,10 @@ def write_report(
         f"- Notification candidates after impact filtering: {notification_candidates}",
         f"- Anomalies removed by impact filtering: {filtered_anomalies}",
         f"- Sparse anomalies absorbed by temporal coalescing: {sparse_anomalies_absorbed}",
+        "- Dates with candidates in at least two countries: "
+        f"{len(cross_country['same_day_occurrences'])}",
+        "- Cross-country grouped notifications: "
+        f"{cross_country['grouped_notification_count']}",
         "- Labels missed by each infeasible country's best "
         f"simultaneous-coverage solution: {len(unpreserved)}",
         f"- Of those, labels never detected by any diagnostic Pareto solution: {never_detected}",
@@ -758,6 +808,12 @@ def write_report(
             "  parameters for every feasible country",
             "- `ensemble-notification-candidates.csv`: anomalies retained by the",
             "  sparse coalescing and minimum labeled-impact stages",
+            "- `ensemble-notification-candidates.json`: the same candidates in",
+            "  machine-readable form for notification grouping",
+            "- `cross-country-notifications.json`: every date shared by at least",
+            "  two countries and notifications grouped at the configured threshold",
+            "- `cross-country-occurrences.csv`: review table of all dates shared by",
+            "  at least two countries",
             "",
         ]
     )

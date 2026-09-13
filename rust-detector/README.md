@@ -176,6 +176,27 @@ impact without assigning impact to the intervening normal days. Dense
 anomalies remain separate. Detection outputs created before `peak_value` and
 `sparse` were added should be regenerated before using this option.
 
+## Analyze and group cross-country notifications
+
+The `group-cross-country` subcommand finds notification candidates with the
+same start date in at least two distinct countries. Dates meeting a configurable
+country threshold become one grouped notification; candidates on other dates
+remain individual. Each group retains the original country anomalies.
+
+The input is a JSON array containing a `country` field and the anomaly fields
+produced by `filter`:
+
+```bash
+cargo run --release -- \
+  group-cross-country \
+  --input /path/to/all-country-candidates.json \
+  --minimum-countries 5 \
+  --output /path/to/cross-country-notifications.json
+```
+
+The output reports every date shared by at least two countries, allowing
+different grouping thresholds to be evaluated from one run.
+
 ## Tune parameters
 
 The `tune` subcommand supports the paper's Chebyshev NSGA-II search and joint
@@ -381,7 +402,11 @@ directory retains the knee and leftmost detector outputs plus
 `notification-candidates.json`. The report directory includes a combined
 `ensemble-notification-candidates.csv`. By default, sparse anomalies separated
 by at most one normal day are combined before minimum labeled-impact filtering;
-use `--coalesce-sparse-gap-days` to change that gap.
+use `--coalesce-sparse-gap-days` to change that gap. The workflow also writes
+machine-readable candidates and a cross-country analysis, grouping dates shared
+by five countries by default. Use `--multi-country-threshold` to change that
+threshold. The report directory includes `cross-country-occurrences.csv` for
+reviewing every date shared by at least two countries.
 
 The work directory stores intermediate inputs and Pareto fronts so an
 interrupted run can continue with `--resume`. Keep it outside the repository:

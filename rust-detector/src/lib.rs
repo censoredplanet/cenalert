@@ -9,6 +9,7 @@ mod isolation_forest;
 pub mod labels;
 mod lof;
 pub mod model;
+pub mod notifications;
 pub mod selection;
 mod statistics;
 pub mod tuning;
@@ -38,6 +39,10 @@ pub use lof::{local_outlier_factor_score, LocalOutlierFactorDetector};
 pub use model::{
     AnnotatedObservation, Anomaly, DetectionResult, DetectorParameters, EnsembleMemberVote,
     EnsembleParameters, EnsembleVote, Observation, OutlierDetectorParameters,
+};
+pub use notifications::{
+    group_same_day_anomalies, CountryAnomaly, CrossCountryGroupingResult, GroupingError,
+    MultiCountryNotification, SameDayOccurrence,
 };
 pub use selection::{
     select_ensemble_nth_from_left, select_ensemble_parameters, select_nth_from_left,

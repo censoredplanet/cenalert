@@ -4,11 +4,12 @@ use std::io::{self, BufWriter};
 use std::path::PathBuf;
 
 use cenalert_detector::{
-    apply_anomaly_filters, coalesce_sparse_anomalies, parse_dashboard_json,
-    parse_ensemble_parameters_json, parse_labels_json, parse_outlier_parameters_json,
-    parse_parameters_json, select_ensemble_nth_from_left, select_ensemble_parameters,
-    select_nth_from_left, select_parameters, tune_chebyshev, tune_ensemble, Anomaly, AnomalyFilter,
-    ChebyshevDetector, CoalescingSummary, DetectionResult, Detector, EnsembleDetector,
+    apply_anomaly_filters, coalesce_sparse_anomalies, group_same_day_anomalies,
+    parse_dashboard_json, parse_ensemble_parameters_json, parse_labels_json,
+    parse_outlier_parameters_json, parse_parameters_json, select_ensemble_nth_from_left,
+    select_ensemble_parameters, select_nth_from_left, select_parameters, tune_chebyshev,
+    tune_ensemble, Anomaly, AnomalyFilter, ChebyshevDetector, CoalescingSummary, CountryAnomaly,
+    CrossCountryGroupingResult, DetectionResult, Detector, EnsembleDetector,
     EnsembleParetoSolution, FilterContext, FilteringResult, IsolationForestDetector,
     LocalOutlierFactorDetector, MinimumLabeledImpactFilter, ParetoSolution, TuningConfig,
 };
@@ -32,6 +33,8 @@ enum Command {
     Select(SelectArgs),
     /// Filter detector output into notification candidates.
     Filter(FilterArgs),
+    /// Analyze same-day candidates and group broad cross-country occurrences.
+    GroupCrossCountry(GroupCrossCountryArgs),
 }
 
 #[derive(Debug, Args)]
@@ -136,6 +139,19 @@ struct FilterArgs {
     coalesce_sparse_gap_days: Option<u32>,
 }
 
+#[derive(Debug, Args)]
+struct GroupCrossCountryArgs {
+    /// JSON array of country-tagged notification candidates.
+    #[arg(long)]
+    input: PathBuf,
+    /// Destination for the cross-country analysis and grouped notifications.
+    #[arg(long)]
+    output: PathBuf,
+    /// Distinct countries required to create one grouped notification.
+    #[arg(long, default_value_t = 5)]
+    minimum_countries: usize,
+}
+
 #[derive(Debug, Serialize)]
 struct DetectorOutput<P> {
     algorithm: &'static str,
@@ -177,7 +193,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         Command::Tune(arguments) => run_tuning(arguments),
         Command::Select(arguments) => run_selection(arguments),
         Command::Filter(arguments) => run_filter(arguments),
+        Command::GroupCrossCountry(arguments) => run_cross_country_grouping(arguments),
     }
+}
+
+fn run_cross_country_grouping(arguments: GroupCrossCountryArgs) -> Result<(), Box<dyn Error>> {
+    let anomalies: Vec<CountryAnomaly> = serde_json::from_reader(File::open(arguments.input)?)?;
+    let result: CrossCountryGroupingResult =
+        group_same_day_anomalies(anomalies, arguments.minimum_countries)?;
+    serde_json::to_writer_pretty(BufWriter::new(File::create(arguments.output)?), &result)?;
+    Ok(())
 }
 
 fn run_filter(arguments: FilterArgs) -> Result<(), Box<dyn Error>> {
@@ -469,6 +494,26 @@ mod tests {
         };
         assert_eq!(arguments.proximity_days, 3);
         assert_eq!(arguments.coalesce_sparse_gap_days, None);
+    }
+
+    #[test]
+    fn parses_cross_country_grouping_subcommand() {
+        let parsed = Cli::try_parse_from([
+            "cenalert-detector",
+            "group-cross-country",
+            "--input",
+            "candidates.json",
+            "--output",
+            "notifications.json",
+            "--minimum-countries",
+            "4",
+        ])
+        .unwrap();
+
+        let Command::GroupCrossCountry(arguments) = parsed.command else {
+            panic!("expected group-cross-country subcommand")
+        };
+        assert_eq!(arguments.minimum_countries, 4);
     }
 
     #[test]
