@@ -142,8 +142,10 @@ pub fn label_coverage(
         .iter()
         .filter(|label| {
             anomalies.iter().any(|anomaly| {
-                let distance_days = anomaly.start.signed_duration_since(label.date).num_days();
-                label.match_mode.matches(distance_days, proximity_days)
+                anomaly_start_dates(anomaly).any(|start| {
+                    let distance_days = start.signed_duration_since(label.date).num_days();
+                    label.match_mode.matches(distance_days, proximity_days)
+                })
             })
         })
         .count();
@@ -167,11 +169,11 @@ pub fn match_anomaly_to_label(
         .enumerate()
         .filter(|(_, label)| label_applies_to_country(label, country_code))
         .filter_map(|(index, label)| {
-            let distance_days = anomaly.start.signed_duration_since(label.date).num_days();
-            label
-                .match_mode
-                .matches(distance_days, proximity_days)
-                .then_some((index, label, distance_days))
+            anomaly_start_dates(anomaly)
+                .map(|start| start.signed_duration_since(label.date).num_days())
+                .filter(|distance| label.match_mode.matches(*distance, proximity_days))
+                .min_by_key(|distance| distance.abs())
+                .map(|distance| (index, label, distance))
         })
         .min_by_key(|(index, label, distance_days)| {
             (
@@ -185,6 +187,10 @@ pub fn match_anomaly_to_label(
             label_index,
             distance_days,
         })
+}
+
+fn anomaly_start_dates(anomaly: &Anomaly) -> impl Iterator<Item = NaiveDate> + '_ {
+    std::iter::once(anomaly.start).chain(anomaly.component_starts.iter().copied())
 }
 
 pub(crate) fn required_country_labels(
@@ -253,9 +259,12 @@ mod tests {
             start: date,
             end: date,
             peak: date,
+            peak_value: Some(1.0),
             score: 1.0,
             residual: 0.0,
             impact: 1.0,
+            sparse: false,
+            component_starts: Vec::new(),
             ensemble_vote: None,
         }
     }
@@ -332,6 +341,25 @@ mod tests {
         assert_eq!(
             label_coverage(&labels, &[anomaly("2025-01-11")], 0).missed,
             1
+        );
+    }
+
+    #[test]
+    fn matches_a_component_start_retained_by_coalescing() {
+        let labels = vec![label("2025-01-03", LabelScope::Country)];
+        let mut combined = anomaly("2025-01-01");
+        combined.component_starts = vec![
+            NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 1, 3).unwrap(),
+        ];
+
+        assert_eq!(label_coverage(&labels, &[combined.clone()], 0).missed, 0);
+        assert_eq!(
+            match_anomaly_to_label(&combined, &labels, Some("RU"), 0),
+            Some(LabelMatch {
+                label_index: 0,
+                distance_days: 0,
+            })
         );
     }
 

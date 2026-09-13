@@ -399,9 +399,14 @@ fn collect_anomalies(annotated: &[AnnotatedObservation]) -> Vec<Anomaly> {
             start: annotated[start_index].date,
             end: annotated[end_index].date,
             peak: peak.date,
+            peak_value: Some(peak.value),
             score: annotated[start_index].score.unwrap_or(f64::NAN),
             residual: annotated[start_index].residual.unwrap_or(f64::NAN),
             impact,
+            sparse: annotated[start_index]
+                .demand_category
+                .is_some_and(is_sparse),
+            component_starts: Vec::new(),
             ensemble_vote: annotated[start_index].ensemble_vote.clone(),
         });
         index += 1;

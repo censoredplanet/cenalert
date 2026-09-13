@@ -139,9 +139,12 @@ mod tests {
             start: date,
             end: date,
             peak: date,
+            peak_value: Some(impact),
             score: 2.0,
             residual: 0.0,
             impact,
+            sparse: false,
+            component_starts: Vec::new(),
             ensemble_vote: None,
         }
     }

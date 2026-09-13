@@ -140,7 +140,8 @@ normalized `[0, 100]` scale is divided by 100 when loaded.
 
 The command prints JSON containing the normalized input summary, detector
 parameters, scale factor, and detected anomaly intervals. Each anomaly contains
-its start, end, peak, score, residual, and impact.
+its start, end, peak, peak value, score, residual, impact, and whether it was
+detected through the sparse Croston path.
 
 Dense ensemble anomalies also contain `ensemble_vote`, which reports the
 Chebyshev, Isolation Forest, and LOF scores, their minimum scores, each voting
@@ -163,8 +164,17 @@ cargo run --release -- \
   --input /path/to/detection-output.json \
   --labels /path/to/labels.json \
   --proximity-days 3 \
+  --coalesce-sparse-gap-days 1 \
   --output /path/to/notification-candidates.json
 ```
+
+When `--coalesce-sparse-gap-days` is supplied, sparse anomalies separated by
+no more than that number of normal days are combined before impact filtering.
+The combined interval retains every component start for label matching, uses
+the component with the largest observed value as its peak, and sums component
+impact without assigning impact to the intervening normal days. Dense
+anomalies remain separate. Detection outputs created before `peak_value` and
+`sparse` were added should be regenerated before using this option.
 
 ## Tune parameters
 
@@ -369,7 +379,9 @@ The series directory may contain paper-format CSV files or single-country JSON
 exports downloaded from the Dashboard. For each feasible country, the work
 directory retains the knee and leftmost detector outputs plus
 `notification-candidates.json`. The report directory includes a combined
-`ensemble-notification-candidates.csv` after minimum labeled-impact filtering.
+`ensemble-notification-candidates.csv`. By default, sparse anomalies separated
+by at most one normal day are combined before minimum labeled-impact filtering;
+use `--coalesce-sparse-gap-days` to change that gap.
 
 The work directory stores intermediate inputs and Pareto fronts so an
 interrupted run can continue with `--resume`. Keep it outside the repository:

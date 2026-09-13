@@ -112,11 +112,21 @@ pub struct Anomaly {
     pub start: NaiveDate,
     pub end: NaiveDate,
     pub peak: NaiveDate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_value: Option<f64>,
     pub score: f64,
     pub residual: f64,
     pub impact: f64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sparse: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub component_starts: Vec<NaiveDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ensemble_vote: Option<EnsembleVote>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Debug, Clone, PartialEq)]

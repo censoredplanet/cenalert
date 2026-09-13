@@ -1,4 +1,5 @@
 mod chebyshev;
+pub mod coalescing;
 mod croston;
 mod detector;
 mod ensemble;
@@ -14,6 +15,9 @@ pub mod tuning;
 mod window;
 
 pub use chebyshev::{chebyshev_score, ChebyshevScore};
+pub use coalescing::{
+    coalesce_sparse_anomalies, CoalescingError, CoalescingResult, CoalescingSummary,
+};
 pub use croston::croston_sba_forecast;
 pub use detector::{ChebyshevDetector, Detector};
 pub use ensemble::EnsembleDetector;

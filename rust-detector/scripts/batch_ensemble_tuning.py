@@ -24,6 +24,7 @@ class Config:
     evaluations: int
     population_size: int
     proximity_days: int
+    coalesce_sparse_gap_days: int
     threads_per_tuning: int
     seed: int
 
@@ -40,6 +41,12 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--evaluations", type=int, default=5_000)
     parser.add_argument("--population-size", type=int, default=100)
     parser.add_argument("--proximity-days", type=int, default=3)
+    parser.add_argument(
+        "--coalesce-sparse-gap-days",
+        type=int,
+        default=1,
+        help="Maximum normal-day gap for combining sparse anomalies.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--threads-per-tuning", type=int, default=1)
@@ -62,6 +69,8 @@ def parse_arguments() -> argparse.Namespace:
         parser.error("--population-size must be an even integer of at least 2")
     if arguments.proximity_days < 0:
         parser.error("--proximity-days must be non-negative")
+    if arguments.coalesce_sparse_gap_days < 0:
+        parser.error("--coalesce-sparse-gap-days must be non-negative")
     if arguments.workers < 1 or arguments.threads_per_tuning < 1:
         parser.error("worker and thread counts must be positive")
     return arguments
@@ -254,6 +263,8 @@ def filter_candidates(
             str(config.labels),
             "--proximity-days",
             str(config.proximity_days),
+            "--coalesce-sparse-gap-days",
+            str(config.coalesce_sparse_gap_days),
             "--output",
             str(output_path),
         ]
@@ -476,6 +487,9 @@ def run_country(
             total_impact=sum(anomaly["impact"] for anomaly in knee_anomalies),
             notification_candidates=len(filtered["anomalies"]),
             filtered_anomalies=len(filtered["discarded"]),
+            sparse_anomalies_absorbed=filtered.get("coalescing", {}).get(
+                "absorbed_anomalies", 0
+            ),
             minimum_labeled_impact=filtered["stages"][0].get("impact_threshold"),
         )
         return result
@@ -559,7 +573,18 @@ def write_outputs(arguments: argparse.Namespace, results: list[dict[str, Any]]) 
     candidate_rows.sort(key=lambda row: (row["country"], row["start"]))
     write_csv(
         output / "ensemble-notification-candidates.csv",
-        ["country", "start", "end", "peak", "score", "residual", "impact"],
+        [
+            "country",
+            "start",
+            "end",
+            "peak",
+            "peak_value",
+            "score",
+            "residual",
+            "impact",
+            "sparse",
+            "component_starts",
+        ],
         candidate_rows,
     )
     selected_parameters = {
@@ -598,6 +623,9 @@ def write_report(
         result.get("notification_candidates", 0) for result in completed
     )
     filtered_anomalies = sum(result.get("filtered_anomalies", 0) for result in completed)
+    sparse_anomalies_absorbed = sum(
+        result.get("sparse_anomalies_absorbed", 0) for result in completed
+    )
     diagnostic_finding = (
         f"{never_detected} labels received no matches across their country's diagnostic "
         "unconstrained Pareto front and remain candidates for manual review."
@@ -617,6 +645,8 @@ def write_report(
         f"- NSGA-II evaluations per non-zero country: {arguments.evaluations:,}",
         f"- Population size: {arguments.population_size}",
         f"- Label proximity: ±{arguments.proximity_days} days",
+        "- Sparse anomaly coalescing: at most "
+        f"{arguments.coalesce_sparse_gap_days} normal day(s) between components",
         f"- Base random seed: {arguments.seed} (deterministically offset by country code)",
         "- Constraint: every applicable proximity-mode country label must be detected",
         "- Global and exact-match pseudo-labels are attribution-only",
@@ -632,6 +662,7 @@ def write_report(
         f"- Unmatched anomalies from selected solutions: {len(unmatched)}",
         f"- Notification candidates after impact filtering: {notification_candidates}",
         f"- Anomalies removed by impact filtering: {filtered_anomalies}",
+        f"- Sparse anomalies absorbed by temporal coalescing: {sparse_anomalies_absorbed}",
         "- Labels missed by each infeasible country's best "
         f"simultaneous-coverage solution: {len(unpreserved)}",
         f"- Of those, labels never detected by any diagnostic Pareto solution: {never_detected}",
@@ -726,7 +757,7 @@ def write_report(
             "- `ensemble-tuning-selected-parameters.json`: selected and leftmost",
             "  parameters for every feasible country",
             "- `ensemble-notification-candidates.csv`: anomalies retained by the",
-            "  minimum labeled-impact filter",
+            "  sparse coalescing and minimum labeled-impact stages",
             "",
         ]
     )
@@ -759,6 +790,7 @@ def main() -> None:
         evaluations=arguments.evaluations,
         population_size=arguments.population_size,
         proximity_days=arguments.proximity_days,
+        coalesce_sparse_gap_days=arguments.coalesce_sparse_gap_days,
         threads_per_tuning=arguments.threads_per_tuning,
         seed=arguments.seed,
     )

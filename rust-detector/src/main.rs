@@ -4,13 +4,13 @@ use std::io::{self, BufWriter};
 use std::path::PathBuf;
 
 use cenalert_detector::{
-    apply_anomaly_filters, parse_dashboard_json, parse_ensemble_parameters_json, parse_labels_json,
-    parse_outlier_parameters_json, parse_parameters_json, select_ensemble_nth_from_left,
-    select_ensemble_parameters, select_nth_from_left, select_parameters, tune_chebyshev,
-    tune_ensemble, Anomaly, AnomalyFilter, ChebyshevDetector, DetectionResult, Detector,
-    EnsembleDetector, EnsembleParetoSolution, FilterContext, FilteringResult,
-    IsolationForestDetector, LocalOutlierFactorDetector, MinimumLabeledImpactFilter,
-    ParetoSolution, TuningConfig,
+    apply_anomaly_filters, coalesce_sparse_anomalies, parse_dashboard_json,
+    parse_ensemble_parameters_json, parse_labels_json, parse_outlier_parameters_json,
+    parse_parameters_json, select_ensemble_nth_from_left, select_ensemble_parameters,
+    select_nth_from_left, select_parameters, tune_chebyshev, tune_ensemble, Anomaly, AnomalyFilter,
+    ChebyshevDetector, CoalescingSummary, DetectionResult, Detector, EnsembleDetector,
+    EnsembleParetoSolution, FilterContext, FilteringResult, IsolationForestDetector,
+    LocalOutlierFactorDetector, MinimumLabeledImpactFilter, ParetoSolution, TuningConfig,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -131,6 +131,9 @@ struct FilterArgs {
     /// Maximum distance for label attribution.
     #[arg(long, default_value_t = 3)]
     proximity_days: u32,
+    /// Merge sparse anomalies separated by at most this many normal days.
+    #[arg(long)]
+    coalesce_sparse_gap_days: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,6 +158,8 @@ struct FilterInput {
 #[derive(Debug, Serialize)]
 struct FilterOutput {
     country: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coalescing: Option<CoalescingSummary>,
     #[serde(flatten)]
     result: FilteringResult,
 }
@@ -186,10 +191,18 @@ fn run_filter(arguments: FilterArgs) -> Result<(), Box<dyn Error>> {
         country_code: country,
         proximity_days: arguments.proximity_days,
     };
+    let (anomalies, coalescing) = if let Some(maximum_gap_days) = arguments.coalesce_sparse_gap_days
+    {
+        let result = coalesce_sparse_anomalies(input.anomalies, maximum_gap_days)?;
+        (result.anomalies, Some(result.summary))
+    } else {
+        (input.anomalies, None)
+    };
     let filters: Vec<Box<dyn AnomalyFilter>> = vec![Box::new(MinimumLabeledImpactFilter)];
     let output = FilterOutput {
         country: country.clone(),
-        result: apply_anomaly_filters(input.anomalies, &context, &filters),
+        coalescing,
+        result: apply_anomaly_filters(anomalies, &context, &filters),
     };
     serde_json::to_writer_pretty(BufWriter::new(File::create(arguments.output)?), &output)?;
     Ok(())
@@ -455,6 +468,7 @@ mod tests {
             panic!("expected filter subcommand")
         };
         assert_eq!(arguments.proximity_days, 3);
+        assert_eq!(arguments.coalesce_sparse_gap_days, None);
     }
 
     #[test]
