@@ -386,6 +386,83 @@ attribution, while the event constrains tuning only for its owning
 }
 ```
 
+### Run the four-group experiment
+
+`scripts/run_experiment_matrix.py` runs the detector and label-constraint
+comparison on a fixed set of country series:
+
+| Group | Detector | Labels constrain tuning |
+| --- | --- | --- |
+| `original` | Chebyshev/Z-score with Croston | No |
+| `labels` | Chebyshev/Z-score with Croston | Yes |
+| `ensemble` | Three-detector ensemble with shared Croston | No |
+| `labels_ensemble` | Three-detector ensemble with shared Croston | Yes |
+
+Here `original` uses the current Rust implementation, including its residual
+ratio parameter. It is a single-detector baseline, not an execution of the
+archived Python backend.
+
+```bash
+cargo build --release
+python3 scripts/run_experiment_matrix.py \
+  --series-directory /path/to/country-series \
+  --labels /path/to/labels.json \
+  --rust-binary target/release/cenalert-detector \
+  --output-directory /path/to/four-group-experiment \
+  --evaluations 5000 \
+  --population-size 100 \
+  --seeds 42 43 44 \
+  --workers 4 \
+  --threads-per-tuning 1
+```
+
+The series directory accepts the same CSV or Dashboard JSON inputs as the
+ensemble batch workflow. Use `--countries RU SS` for a subset and `--seeds 42`
+for an initial run. Each country and seed runs all four groups with the same
+evaluation budget and country-offset seed. The Chebyshev K range is 5–18.
+The existing efficiency ranges are retained: 0.01–0.1 for Chebyshev and
+0.05–0.1 for the ensemble. Seeds control the optimizer's evolutionary operators;
+its initial population remains unseeded, so fresh runs can differ even with
+the same seed. Saved Pareto fronts and parameters preserve each realized run.
+Both knee (including its leftmost fallback) and leftmost selections are
+evaluated from each Pareto front; `--selections knee` or `leftmost` limits this.
+Compare rows with the same country, seed, and selection rule.
+
+Outputs include:
+
+- `summary.csv`: status, anomaly count, country-label coverage, impact, tuning
+  time, and fixed-parameter detection time for each run and selection.
+- `anomalies.csv`: raw anomaly intervals with nearest applicable label matches.
+- `label-coverage.csv`: each applicable country label and its matching starts.
+- `detector-differences.csv`: ensemble-only and Chebyshev-only starts, allowing
+  the configured proximity window for a counterpart (default ±3 days).
+- `report.md`: completion counts and interpretation notes.
+- `runs/<seed>/<country>/<group>/`: Pareto front, selected parameters, complete
+  detection JSON, selection logs, and result metadata.
+
+Times include subprocess startup and I/O. Concurrent runs share machine
+resources; use `--workers 1` for timing comparisons without concurrent jobs.
+
+Labels are supplied for reporting in all groups; only the two constrained
+groups receive them during tuning. Coverage of those tuning labels measures
+preservation, and unmatched anomalies remain candidates for review. Raw outputs
+precede coalescing, impact filtering, and notification grouping. This experiment
+tunes and evaluates on the supplied period; a separate temporal split is needed
+for held-out evaluation.
+
+Keep the experiment directory outside Git. It retains input series, labels,
+the executable, scripts, and settings so `--resume` can validate them before
+reusing completed runs. Changed inputs, settings, or code require a new output
+directory. Failed executions are retried; infeasible searches are recorded as
+results. Missing artifacts in completed runs trigger a rerun. A zero-anomaly
+Pareto front selects a deterministic representative and records zero detections.
+
+Run the experiment regression tests after building the release binary:
+
+```bash
+python3 -m unittest discover -s scripts -p test_experiment_matrix.py -v
+```
+
 ### Run all-country ensemble tuning
 
 `scripts/batch_ensemble_tuning.py` runs the complete constrained workflow for

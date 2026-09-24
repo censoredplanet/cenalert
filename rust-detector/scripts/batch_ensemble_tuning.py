@@ -27,6 +27,7 @@ class Config:
     coalesce_sparse_gap_days: int
     threads_per_tuning: int
     seed: int
+    algorithm: str = "ensemble"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -248,7 +249,7 @@ def detect(config: Config, input_path: Path, parameter_path: Path) -> dict[str, 
             str(config.rust_binary),
             "detect",
             "--algorithm",
-            "ensemble",
+            config.algorithm,
             "--input",
             str(input_path),
             "--parameters",
@@ -291,7 +292,7 @@ def tune(
         str(config.rust_binary),
         "tune",
         "--algorithm",
-        "ensemble",
+        config.algorithm,
         "--input",
         str(input_path),
         "--output",
@@ -322,7 +323,7 @@ def select(
         str(config.rust_binary),
         "select",
         "--algorithm",
-        "ensemble",
+        config.algorithm,
         "--input",
         str(front_path),
         "--output",
