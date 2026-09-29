@@ -23,6 +23,7 @@ impl Detector for LocalOutlierFactorDetector {
                 window: self.parameters.window,
                 minimum_score: self.parameters.min_score,
             },
+            None,
         )
     }
 }

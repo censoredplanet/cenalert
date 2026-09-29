@@ -26,6 +26,7 @@ impl Detector for IsolationForestDetector {
             IsolationForestScorer {
                 minimum_score: self.parameters.min_score,
             },
+            None,
         )
     }
 }

@@ -21,6 +21,7 @@ class ExperimentTests(unittest.TestCase):
         self.series.mkdir()
         self.labels = self.root / "labels.json"
         self.labels.write_text(json.dumps([
+            {"scope": "country", "country_code": "RU", "date": "2024-07-19"},
             {"scope": "country", "country_code": "RU", "date": "2025-07-20"}
         ]))
         self.binary = Path(__file__).resolve().parents[1] / "target/release/cenalert-detector"
@@ -29,17 +30,20 @@ class ExperimentTests(unittest.TestCase):
             rust_binary=self.binary, output_directory=self.root / "output", seeds=[42],
             evaluations=20, population_size=10, proximity_days=3, threads_per_tuning=1,
             selections=["knee", "leftmost"], resume=False,
+            train_end=date(2024, 12, 31), test_end=date(2026, 12, 31), baseline_window=60,
         )
         self.config = batch.Config(self.labels, self.binary, self.root, 20, 10, 3, 1, 1, 42)
 
     def add_series(self, country="RU", zero=False):
-        rows = [{"country": country, "date": str(date(2025, 1, 1) + timedelta(days=i)),
-                 "rate": 0.0 if zero else (100.0 if i == 200 else 10.0 + i % 3)}
-                for i in range(240)]
+        rows = [{"country": country, "date": str(date(2024, 1, 1) + timedelta(days=i)),
+                 "rate": 0.0 if zero else (100.0 if i in (200, 566) else 10.0 + i % 3)}
+                for i in range(606)]
         (self.series / f"{country}.json").write_text(json.dumps(rows))
 
     def test_constraints_only_reach_labeled_variants(self):
         for variant, (algorithm, constrained) in matrix.VARIANTS.items():
+            if variant == "fixed_3sigma":
+                continue
             with self.subTest(variant=variant), patch.object(batch, "run_command") as run:
                 config = matrix.replace(self.config, algorithm=algorithm)
                 batch.tune(config, Path("input.json"), Path("front.json"), "RU", constrained)
@@ -92,7 +96,8 @@ class ExperimentTests(unittest.TestCase):
                 self.assertEqual(result["status"], "skipped_all_zero"
                                  if result["country"] == "SS" else "completed", result)
                 if result["country"] == "RU":
-                    self.assertEqual(len(result["selections"]), 2)
+                    self.assertEqual(len(result["selections"]),
+                                     1 if result["variant"] == "fixed_3sigma" else 2)
                     for selected in result["selections"]:
                         self.assertGreaterEqual(selected["anomaly_count"], 1)
                         self.assertEqual(selected["country_labels_covered"], 1)
@@ -106,14 +111,47 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(resumed["status"], "completed")
 
     def test_infeasible_is_recorded_without_detection(self):
+        (self.root / "inputs").mkdir()
+        (self.root / "inputs/training-labels.json").write_text(self.labels.read_text())
         with patch.object(matrix, "tune", side_effect=RuntimeError(
                 "tuning found no parameter set that detects every label")), \
                 patch.object(matrix, "detect") as detect:
             result = matrix.run_variant(self.config, "RU", "labels",
-                                        dict(observations=2, zero_observations=0),
+                                        dict(observations=2, zero_observations=0,
+                                             training_observations=1, test_observations=1,
+                                             training_maximum=10),
                                         ["knee"], False)
         self.assertEqual(result["status"], "no_feasible_solution")
         detect.assert_not_called()
+
+    def test_training_inputs_exclude_future_labels_and_values(self):
+        self.add_series()
+        matrix.prepare_inputs(self.args)
+        inputs = self.args.output_directory / "inputs"
+        training_labels = json.loads((inputs / "training-labels.json").read_text())
+        self.assertEqual([label["date"] for label in training_labels], ["2024-07-19"])
+        training = json.loads((inputs / "RU-train.json").read_text())
+        self.assertEqual(training[-1]["date"], "2024-12-31")
+
+    def test_fixed_baseline_uses_only_previous_values(self):
+        rows = [{"date": str(date(2025, 1, 1) + timedelta(days=i)), "rate": value}
+                for i, value in enumerate([0, 0, 0, 10, 10000])]
+        first = matrix.fixed_three_sigma(rows[:4], 3, 100)["anomalies"][0]
+        later = matrix.fixed_three_sigma(rows, 3, 100)["anomalies"][0]
+        self.assertEqual(first["start"], later["start"])
+        self.assertIsNone(first["score"])
+        self.assertEqual(first["impact"], 10)
+
+    def test_metrics_exclude_training_starts_and_training_labels(self):
+        anomalies = [dict(start="2024-12-31", impact=10),
+                     dict(start="2025-01-02", impact=20)]
+        labels = [dict(scope="country", country_code="RU", date="2024-12-31"),
+                  dict(scope="country", country_code="RU", date="2025-01-01")]
+        result = matrix.evaluate_period(anomalies, labels, "RU", "2025-01-01", "2025-12-31", 3)
+        self.assertEqual(result["anomaly_count"], 1)
+        self.assertEqual(result["country_labels_total"], 1)
+        self.assertEqual(result["country_labels_covered"], 1)
+        self.assertEqual(result["total_impact"], 20)
 
     def test_partial_failed_runs_are_excluded_from_comparisons(self):
         run = dict(country="RU", seed=42, effective_seed=297, variant="original",

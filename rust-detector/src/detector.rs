@@ -27,11 +27,20 @@ pub(crate) trait DenseScorer {
 
 pub struct ChebyshevDetector {
     parameters: DetectorParameters,
+    reference_maximum: Option<f64>,
 }
 
 impl ChebyshevDetector {
     pub fn new(parameters: DetectorParameters) -> Self {
-        Self { parameters }
+        Self {
+            parameters,
+            reference_maximum: None,
+        }
+    }
+
+    pub fn with_reference_maximum(mut self, maximum: f64) -> Self {
+        self.reference_maximum = Some(maximum);
+        self
     }
 }
 
@@ -43,6 +52,7 @@ impl Detector for ChebyshevDetector {
             self.parameters.min_residual_ratio,
             self.parameters.efficiency,
             ChebyshevScorer::new(self.parameters),
+            self.reference_maximum,
         )
     }
 }
@@ -107,11 +117,14 @@ pub(crate) fn run_detector<S: DenseScorer>(
     min_residual_ratio: f64,
     efficiency: f64,
     scorer: S,
+    reference_maximum: Option<f64>,
 ) -> DetectionResult {
-    let series_maximum = observations
-        .iter()
-        .map(|observation| observation.value)
-        .fold(0.0, f64::max);
+    let series_maximum = reference_maximum.unwrap_or_else(|| {
+        observations
+            .iter()
+            .map(|observation| observation.value)
+            .fold(0.0, f64::max)
+    });
     let mut state = DetectorState::new(
         window,
         min_residual_ratio,
@@ -126,7 +139,7 @@ pub(crate) fn run_detector<S: DenseScorer>(
         state.process(index, observation.value, &mut annotated);
     }
 
-    let scale_factor = normalize(&mut annotated);
+    let scale_factor = normalize(&mut annotated, reference_maximum);
     let anomalies = collect_anomalies(&annotated);
     DetectionResult {
         annotated,
@@ -344,11 +357,13 @@ fn finite_or_infinite_option(value: Option<f64>) -> Option<f64> {
     value.and_then(finite_or_infinite)
 }
 
-fn normalize(annotated: &mut [AnnotatedObservation]) -> f64 {
-    let maximum = annotated
-        .iter()
-        .map(|point| point.value)
-        .fold(0.0, f64::max);
+fn normalize(annotated: &mut [AnnotatedObservation], reference_maximum: Option<f64>) -> f64 {
+    let maximum = reference_maximum.unwrap_or_else(|| {
+        annotated
+            .iter()
+            .map(|point| point.value)
+            .fold(0.0, f64::max)
+    });
     let scale_factor = if maximum > 100.0 {
         maximum / 100.0
     } else {
@@ -419,6 +434,35 @@ mod tests {
     use chrono::NaiveDate;
 
     use super::*;
+
+    #[test]
+    fn fixed_reference_prevents_future_maximum_changing_past_scores() {
+        let mut values = vec![0.0; 180];
+        for index in (0..160).step_by(5) {
+            values[index] = 10.0;
+        }
+        values[165] = 30.0;
+        let detector = ChebyshevDetector::new(DetectorParameters {
+            window: 30,
+            z: 3.0,
+            k: 5.0,
+            min_residual_ratio: 0.1,
+            efficiency: 0.05,
+        })
+        .with_reference_maximum(30.0);
+        let before = detector.detect(&observations(&values));
+        values.extend([10000.0, 0.0]);
+        let after = detector.detect(&observations(&values));
+        assert_eq!(before.scale_factor, after.scale_factor);
+        for (left, right) in before.annotated.iter().zip(&after.annotated) {
+            assert_eq!(left.anomaly, right.anomaly);
+            assert_eq!(left.value, right.value);
+            assert_eq!(
+                left.threshold.map(f64::to_bits),
+                right.threshold.map(f64::to_bits)
+            );
+        }
+    }
 
     fn observations(values: &[f64]) -> Vec<Observation> {
         values

@@ -39,6 +39,9 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct DetectArgs {
+    /// Freeze Croston and output scaling to the maximum through this training date.
+    #[arg(long)]
+    reference_end: Option<chrono::NaiveDate>,
     /// Dashboard-exported time-series JSON.
     #[arg(long)]
     input: PathBuf,
@@ -303,12 +306,36 @@ fn knee_selection_message(
 
 fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
     let observations = parse_dashboard_json(File::open(arguments.input)?)?;
+    let reference_maximum = if let Some(end) = arguments.reference_end {
+        if !matches!(
+            arguments.algorithm,
+            DetectionAlgorithm::Chebyshev | DetectionAlgorithm::Ensemble
+        ) {
+            return Err("--reference-end supports chebyshev and ensemble".into());
+        }
+        let maximum = observations
+            .iter()
+            .filter(|point| point.date <= end)
+            .map(|point| point.value)
+            .reduce(f64::max)
+            .ok_or("no observations on or before --reference-end")?;
+        if maximum <= 0.0 {
+            return Err("training reference maximum must be positive".into());
+        }
+        Some(maximum)
+    } else {
+        None
+    };
     let parameter_file = File::open(arguments.parameters)?;
 
     match arguments.algorithm {
         DetectionAlgorithm::Chebyshev => {
             let parameters = parse_parameters_json(parameter_file)?;
-            let result = ChebyshevDetector::new(parameters).detect(&observations);
+            let mut detector = ChebyshevDetector::new(parameters);
+            if let Some(maximum) = reference_maximum {
+                detector = detector.with_reference_maximum(maximum);
+            }
+            let result = detector.detect(&observations);
             write_detection_output("chebyshev", &observations, parameters, result)
         }
         DetectionAlgorithm::Lof => {
@@ -323,7 +350,11 @@ fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
         }
         DetectionAlgorithm::Ensemble => {
             let parameters = parse_ensemble_parameters_json(parameter_file)?;
-            let result = EnsembleDetector::new(parameters).detect(&observations);
+            let mut detector = EnsembleDetector::new(parameters);
+            if let Some(maximum) = reference_maximum {
+                detector = detector.with_reference_maximum(maximum);
+            }
+            let result = detector.detect(&observations);
             write_detection_output("ensemble", &observations, parameters, result)
         }
     }

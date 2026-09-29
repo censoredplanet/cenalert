@@ -11,11 +11,20 @@ const REQUIRED_VOTES: u8 = 2;
 
 pub struct EnsembleDetector {
     parameters: EnsembleParameters,
+    reference_maximum: Option<f64>,
 }
 
 impl EnsembleDetector {
     pub fn new(parameters: EnsembleParameters) -> Self {
-        Self { parameters }
+        Self {
+            parameters,
+            reference_maximum: None,
+        }
+    }
+
+    pub fn with_reference_maximum(mut self, maximum: f64) -> Self {
+        self.reference_maximum = Some(maximum);
+        self
     }
 }
 
@@ -43,6 +52,7 @@ impl Detector for EnsembleDetector {
                     minimum_score: parameters.lof_min_score,
                 },
             },
+            self.reference_maximum,
         )
     }
 }

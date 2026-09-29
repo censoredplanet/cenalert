@@ -386,10 +386,12 @@ attribution, while the event constrains tuning only for its owning
 }
 ```
 
-### Run the four-group experiment
+### Run the temporal evaluation
 
 `scripts/run_experiment_matrix.py` runs the detector and label-constraint
-comparison on a fixed set of country series:
+comparison plus an untuned baseline on a fixed set of country series. The
+default training cutoff is 2024-12-31; test results cover 2025–2026 through the
+last available observation.
 
 | Group | Detector | Labels constrain tuning |
 | --- | --- | --- |
@@ -397,6 +399,7 @@ comparison on a fixed set of country series:
 | `labels` | Chebyshev/Z-score with Croston | Yes |
 | `ensemble` | Three-detector ensemble with shared Croston | No |
 | `labels_ensemble` | Three-detector ensemble with shared Croston | Yes |
+| `fixed_3sigma` | Previous 60 observations, mean + 3 population standard deviations | No |
 
 Here `original` uses the current Rust implementation, including its residual
 ratio parameter. It is a single-detector baseline, not an execution of the
@@ -409,12 +412,36 @@ python3 scripts/run_experiment_matrix.py \
   --labels /path/to/labels.json \
   --rust-binary target/release/cenalert-detector \
   --output-directory /path/to/four-group-experiment \
+  --train-end 2024-12-31 \
+  --test-end 2026-12-31 \
   --evaluations 5000 \
   --population-size 100 \
   --seeds 42 43 44 \
   --workers 4 \
   --threads-per-tuning 1
 ```
+
+Add `--prepare-only` to validate and snapshot inputs before starting searches.
+Then run the same command with `--resume` and without `--prepare-only`.
+`input-summary.json` records actual training/test coverage for each country.
+Countries without either period or without a positive training maximum are
+explicitly skipped. Use one consistent topic/keyword source across the cutoff.
+
+Only training observations and labels dated on or before the cutoff participate
+in tuning and selection. Detection replays historical observations to initialize
+the window, keeps the selected parameters fixed, and reports intervals starting
+after the cutoff. Earlier intervals remain in full detection JSON. Croston's
+denominator and output normalization are frozen to the training maximum using
+`detect --reference-end`; later maxima cannot change those reference values.
+Dashboard stitching may incorporate later revisions, so this is a retrospective
+temporal test on the downloaded snapshot.
+
+The fixed baseline uses a strict `value > mean + 3*std` rule, with the preceding
+60 observations including zeros and anomalous values. Consecutive flagged
+observations form intervals. A rise above a zero-variance window triggers an
+anomaly with a null score. `--baseline-window` changes the prespecified window;
+60 is an initial experiment choice. This baseline has no Croston path or
+parameter search. It appears once per seed with selection `fixed`.
 
 The series directory accepts the same CSV or Dashboard JSON inputs as the
 ensemble batch workflow. Use `--countries RU SS` for a subset and `--seeds 42`
@@ -434,6 +461,7 @@ Outputs include:
   time, and fixed-parameter detection time for each run and selection.
 - `anomalies.csv`: raw anomaly intervals with nearest applicable label matches.
 - `label-coverage.csv`: each applicable country label and its matching starts.
+- `yearly-summary.csv`: test metrics and actual coverage dates for each year.
 - `detector-differences.csv`: ensemble-only and Chebyshev-only starts, allowing
   the configured proximity window for a counterpart (default ±3 days).
 - `report.md`: completion counts and interpretation notes.
@@ -443,12 +471,12 @@ Outputs include:
 Times include subprocess startup and I/O. Concurrent runs share machine
 resources; use `--workers 1` for timing comparisons without concurrent jobs.
 
-Labels are supplied for reporting in all groups; only the two constrained
-groups receive them during tuning. Coverage of those tuning labels measures
-preservation, and unmatched anomalies remain candidates for review. Raw outputs
-precede coalescing, impact filtering, and notification grouping. This experiment
-tunes and evaluates on the supplied period; a separate temporal split is needed
-for held-out evaluation.
+Test-period labels are used only for reporting. They are incomplete ground
+truth; unmatched anomalies remain candidates for review. Raw outputs precede
+coalescing, impact filtering, and notification grouping. Annual summaries match
+starts and labels within each year; pooled coverage can additionally match
+across year boundaries. Impact depends on each detector's threshold, so larger
+impact or more detections alone does not establish better detection quality.
 
 Keep the experiment directory outside Git. It retains input series, labels,
 the executable, scripts, and settings so `--resume` can validate them before

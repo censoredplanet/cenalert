@@ -7,6 +7,7 @@ import argparse
 import filecmp
 import json
 import shutil
+import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import date
@@ -25,8 +26,9 @@ VARIANTS = {
     "labels": ("chebyshev", True),
     "ensemble": ("ensemble", False),
     "labels_ensemble": ("ensemble", True),
+    "fixed_3sigma": ("fixed_3sigma", False),
 }
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -52,7 +54,15 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--selections", choices=["knee", "leftmost"], nargs="+",
                         default=["knee", "leftmost"])
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--train-end", default="2024-12-31", type=date.fromisoformat)
+    parser.add_argument("--test-end", default="2026-12-31", type=date.fromisoformat)
+    parser.add_argument("--baseline-window", type=int, default=60,
+                        help="Previous observations used by the fixed 3-sigma baseline.")
+    parser.add_argument("--prepare-only", action="store_true",
+                        help="Validate and snapshot inputs without starting tuning.")
     args = parser.parse_args()
+    if args.test_end <= args.train_end or args.baseline_window < 2:
+        parser.error("test end must follow training end; baseline window must be at least 2")
     if args.population_size < 4 or args.population_size % 2:
         parser.error("--population-size must be even and at least 4")
     if args.evaluations < args.population_size:
@@ -99,6 +109,8 @@ def prepare_inputs(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]
         "initial_population_seeded": False,
         "efficiency_bounds": {"chebyshev": [0.01, 0.1], "ensemble": [0.05, 0.1]},
         "postprocessing": False,
+        "train_end": str(args.train_end), "test_end": str(args.test_end),
+        "baseline_window": args.baseline_window, "baseline_sigma": 3.0,
     }
     # JSON normalizes tuples so manifests can be compared after deserialization.
     manifest = json.loads(json.dumps(manifest))
@@ -139,8 +151,71 @@ def prepare_inputs(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]
                 candidate.replace(destination)
         finally:
             candidate.unlink(missing_ok=True)
+        rows = json.loads(destination.read_text())
+        training = [row for row in rows if row["date"] <= str(args.train_end)]
+        evaluation = [row for row in rows if row["date"] <= str(args.test_end)]
+        test = [row for row in evaluation if row["date"] > str(args.train_end)]
+        write_json(output / "inputs" / f"{country}-train.json", training)
+        write_json(output / "inputs" / f"{country}-evaluation.json", evaluation)
+        details[country].update(
+            train_end=str(args.train_end), test_end=str(args.test_end),
+            training_observations=len(training), test_observations=len(test),
+            training_maximum=max((row["rate"] for row in training), default=0.0),
+            test_first_date=test[0]["date"] if test else None,
+            test_last_date=test[-1]["date"] if test else None,
+            baseline_window=args.baseline_window,
+        )
+    write_json(output / "inputs/training-labels.json",
+               [label for label in labels if label["date"] <= str(args.train_end)])
+    write_json(output / "input-summary.json", details)
     write_json(manifest_path, manifest)
     return sorted(by_country), details
+
+
+def fixed_three_sigma(rows: list[dict[str, Any]], window: int,
+                      reference_maximum: float) -> dict[str, Any]:
+    scale = max(1.0, reference_maximum / 100.0)
+    anomalies = []
+    active = None
+    for index in range(window, len(rows)):
+        history = [row["rate"] for row in rows[index-window:index]]
+        mean = statistics.mean(history)
+        std = statistics.pstdev(history)
+        value = rows[index]["rate"]
+        threshold = mean + 3.0 * std
+        if value <= threshold:
+            active = None
+            continue
+        when = rows[index]["date"]
+        if active is None:
+            active = dict(start=when, end=when, peak=when, peak_value=value / scale,
+                          score=(value - mean) / std if std else None,
+                          residual=(value - mean) / scale, impact=0.0, sparse=False)
+            anomalies.append(active)
+        active["end"] = when
+        active["impact"] += (value - threshold) / scale
+        if value / scale > active["peak_value"]:
+            active.update(peak=when, peak_value=value / scale)
+    return {"algorithm": "fixed_3sigma", "scale_factor": scale, "anomalies": anomalies}
+
+
+def evaluate_period(anomalies: list[dict[str, Any]], labels: list[dict[str, Any]],
+                    country: str, first: str, last: str, proximity: int) -> dict[str, Any]:
+    anomalies = [a for a in anomalies if first <= a["start"] <= last]
+    labels = [label for label in labels if first <= label["date"] <= last]
+    required = required_labels(labels, country, first, last, 0)
+    label_results = [
+        {"label": label, "matched_starts": [a["start"] for a in anomalies
+         if label_matches(label, date.fromisoformat(a["start"]), proximity)]}
+        for label in required
+    ]
+    annotated = [{**a, "label_match": matched_label(a, labels, country, proximity)}
+                 for a in anomalies]
+    return dict(anomaly_count=len(anomalies), country_labels_total=len(required),
+                country_labels_covered=sum(bool(row["matched_starts"]) for row in label_results),
+                unmatched_anomalies=sum(a["label_match"] is None for a in annotated),
+                total_impact=sum(a["impact"] for a in anomalies),
+                labels=label_results, anomalies=annotated)
 
 
 def select_parameters(config: Config, front: Path, parameters: Path, selection: str) -> str:
@@ -159,16 +234,18 @@ def select_parameters(config: Config, front: Path, parameters: Path, selection: 
 def run_variant(config: Config, country: str, variant: str, details: dict[str, Any],
                 selections: list[str], resume: bool) -> dict[str, Any]:
     algorithm, constrained = VARIANTS[variant]
+    if variant == "fixed_3sigma":
+        selections = ["fixed"]
     directory = config.work_directory / "runs" / str(config.seed) / country / variant
     directory.mkdir(parents=True, exist_ok=True)
     result_path = directory / "result.json"
     if resume and result_path.exists():
         previous = json.loads(result_path.read_text())
-        artifacts = [directory / "pareto-front.json"] + [
+        artifacts = ([] if variant == "fixed_3sigma" else [directory / "pareto-front.json"]) + [
             directory / f"{selection}-{kind}.json"
             for selection in selections for kind in ("parameters", "detection")
         ]
-        if previous["status"] in ("skipped_all_zero", "no_feasible_solution") or (
+        if previous["status"].startswith("skipped_") or previous["status"] == "no_feasible_solution" or (
             previous["status"] == "completed" and all(path.exists() for path in artifacts)
         ):
             return previous
@@ -178,47 +255,61 @@ def run_variant(config: Config, country: str, variant: str, details: dict[str, A
                   effective_seed=country_seed(config.seed, country), **details)
     result["selections"] = []
     try:
+        if not details["training_observations"] or not details["test_observations"]:
+            result["status"] = "skipped_missing_period"
+            return result
         if details["zero_observations"] == details["observations"]:
             result["status"] = "skipped_all_zero"
             return result
-        series = config.work_directory / "inputs" / f"{country}.json"
+        if details["training_maximum"] <= 0.0:
+            result["status"] = "skipped_zero_training"
+            return result
+        series = config.work_directory / "inputs" / f"{country}-train.json"
+        evaluation_series = config.work_directory / "inputs" / f"{country}-evaluation.json"
+        training_labels = config.work_directory / "inputs/training-labels.json"
         front = directory / "pareto-front.json"
-        start = perf_counter()
-        try:
-            tuning = tune(config, series, front, country, constrained)
-        finally:
-            result["tuning_seconds"] = perf_counter() - start
-        (directory / "tuning.log").write_text(tuning.stdout + tuning.stderr)
+        result["tuning_seconds"] = 0.0
+        if variant != "fixed_3sigma":
+            start = perf_counter()
+            try:
+                tuning = tune(replace(config, labels=training_labels), series, front, country,
+                              constrained and bool(json.loads(training_labels.read_text())))
+            finally:
+                result["tuning_seconds"] = perf_counter() - start
+            (directory / "tuning.log").write_text(tuning.stdout + tuning.stderr)
         labels = json.loads(config.labels.read_text())
-        required = required_labels(labels, country, details["first_date"],
-                                   details["last_date"], config.proximity_days)
         for selection in selections:
             parameters = directory / f"{selection}-parameters.json"
-            selection_message = select_parameters(config, front, parameters, selection)
+            if selection == "fixed":
+                write_json(parameters, {"window": details["baseline_window"], "sigma": 3.0})
+                selection_message = "fixed parameters; no tuning\n"
+            else:
+                selection_message = select_parameters(config, front, parameters, selection)
             (directory / f"{selection}-selection.log").write_text(selection_message)
             start = perf_counter()
-            detected = detect(config, series, parameters)
+            if selection == "fixed":
+                detected = fixed_three_sigma(json.loads(evaluation_series.read_text()),
+                                             details["baseline_window"], details["training_maximum"])
+            else:
+                detected = detect(config, evaluation_series, parameters, details["train_end"])
             detection_seconds = perf_counter() - start
             write_json(directory / f"{selection}-detection.json", detected)
-            anomalies = detected["anomalies"]
-            label_results = [
-                {"label": label, "matched_starts": [a["start"] for a in anomalies
-                 if label_matches(label, date.fromisoformat(a["start"]), config.proximity_days)]}
-                for label in required
-            ]
-            annotated = [{**anomaly, "label_match": matched_label(
-                anomaly, labels, country, config.proximity_days)} for anomaly in anomalies]
+            metrics = evaluate_period(detected["anomalies"], labels, country,
+                                      details["test_first_date"], details["test_last_date"],
+                                      config.proximity_days)
+            yearly = []
+            for year in range(int(details["test_first_date"][:4]), int(details["test_last_date"][:4])+1):
+                first = max(details["test_first_date"], f"{year}-01-01")
+                last = min(details["test_last_date"], f"{year}-12-31")
+                yearly.append({"year": year, "first_date": first, "last_date": last,
+                               **evaluate_period(detected["anomalies"], labels, country,
+                                                 first, last, config.proximity_days)})
             result["selections"].append({
                 "selection": selection,
                 "knee_found": (selection_message.startswith("selected ")
                                if selection == "knee" else None),
                 "detection_seconds": detection_seconds,
-                "anomaly_count": len(anomalies),
-                "country_labels_total": len(required),
-                "country_labels_covered": sum(bool(row["matched_starts"]) for row in label_results),
-                "unmatched_anomalies": sum(a["label_match"] is None for a in annotated),
-                "total_impact": sum(a["impact"] for a in anomalies),
-                "labels": label_results, "anomalies": annotated,
+                **metrics, "yearly": yearly,
             })
         result["status"] = "completed"
     except Exception as error:
@@ -231,7 +322,7 @@ def run_variant(config: Config, country: str, variant: str, details: dict[str, A
 
 
 def export_results(output: Path, results: list[dict[str, Any]], proximity: int) -> None:
-    summaries, anomalies, labels, differences = [], [], [], []
+    summaries, anomalies, labels, differences, annual = [], [], [], [], []
     index = {}
     for run in results:
         base = {key: run[key] for key in ("country", "seed", "effective_seed", "variant",
@@ -243,7 +334,9 @@ def export_results(output: Path, results: list[dict[str, Any]], proximity: int) 
         for selected in run["selections"]:
             identity = {**base, "selection": selected["selection"]}
             summaries.append({**identity, **{k: v for k, v in selected.items()
-                                             if k not in ("labels", "anomalies")}})
+                                             if k not in ("labels", "anomalies", "yearly")}})
+            annual.extend({**identity, **{k: v for k, v in year.items()
+                           if k not in ("labels", "anomalies")}} for year in selected["yearly"])
             index[(run["seed"], run["country"], selected["selection"], run["variant"])] = selected
             anomalies.extend({**identity, **a, "label_match": json.dumps(a["label_match"])}
                              for a in selected["anomalies"])
@@ -279,18 +372,23 @@ def export_results(output: Path, results: list[dict[str, Any]], proximity: int) 
               "score", "residual", "impact", "sparse", "label_match"], anomalies)
     write_csv(output / "label-coverage.csv", identity_fields + ["date", "description",
               "matched_starts"], labels)
+    write_csv(output / "yearly-summary.csv", identity_fields + ["year", "first_date", "last_date",
+              "anomaly_count", "country_labels_total", "country_labels_covered",
+              "unmatched_anomalies", "total_impact"], annual)
     write_csv(output / "detector-differences.csv", ["seed", "country", "selection",
               "variant", "baseline", "direction", "start", "end", "impact", "label_match"],
               differences)
-    lines = ["# Four-group experiment", "",
+    lines = ["# Temporal evaluation: four groups and fixed baseline", "",
              "Raw detections before coalescing, impact filtering, and notification grouping.",
-             "Country-label coverage measures known-event preservation. In constrained groups,",
-             "these same labels are used during tuning. Unmatched anomalies need review.", "",
-             "| Group | Completed | Infeasible | All-zero | Errors |",
-             "| --- | ---: | ---: | ---: | ---: |"]
+             "Coverage uses held-out country labels. Unmatched anomalies need review.",
+             "Metrics include intervals starting in the test period. Intervals starting in training",
+             "are retained in full detection JSON and excluded from test counts.", "",
+             "| Group | Completed | Infeasible | All-zero | Missing period | Zero training | Errors |",
+             "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for variant in VARIANTS:
         counts = [sum(r["variant"] == variant and r["status"] == status for r in results)
-                  for status in ("completed", "no_feasible_solution", "skipped_all_zero", "error")]
+                  for status in ("completed", "no_feasible_solution", "skipped_all_zero",
+                                 "skipped_missing_period", "skipped_zero_training", "error")]
         lines.append(f"| {variant} | " + " | ".join(map(str, counts)) + " |")
     lines += ["", "Counts include every requested seed. Compare matching countries, seeds, and",
               "selection rules in `summary.csv`; failed groups have no comparable detection result.",
@@ -300,13 +398,23 @@ def export_results(output: Path, results: list[dict[str, Any]], proximity: int) 
               "Seeds control evolutionary operators; the optimizer's initial population is",
               "unseeded. Fresh runs can differ. Saved fronts and parameters preserve this run.",
               "Timing includes subprocess startup and I/O under the configured concurrency.", "",
-              "This run tunes and evaluates on the supplied period. It is not a held-out test.", ""]
+              "See `experiment.json` for cutoffs and `input-summary.json` for actual coverage.",
+              "`yearly-summary.csv` reports each test year separately; boundary matches use",
+              "starts and labels within that year, so annual coverage may differ from pooled coverage.",
+              "The fixed baseline uses the preceding observations (including zeros and spikes),",
+              "population standard deviation, and a strict value > mean + 3*std decision.",
+              "Its score is null when standard deviation is zero; a positive rise still alerts.",
+              "Croston and impact scaling use the training maximum. Historical Dashboard stitching",
+              "may reflect later data revisions; this is retrospective temporal evaluation.", ""]
     (output / "report.md").write_text("\n".join(lines))
 
 
 def main() -> None:
     args = parse_arguments()
     countries, details = prepare_inputs(args)
+    if args.prepare_only:
+        print(f"Prepared {len(countries)} countries in {args.output_directory}")
+        return
     output = args.output_directory.resolve()
     config = Config(labels=output / "inputs/labels.json",
                     rust_binary=output / "inputs/cenalert-detector", work_directory=output,

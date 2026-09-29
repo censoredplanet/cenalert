@@ -243,7 +243,8 @@ def ensemble_parameters(values: list[float]) -> dict[str, float | int]:
     }
 
 
-def detect(config: Config, input_path: Path, parameter_path: Path) -> dict[str, Any]:
+def detect(config: Config, input_path: Path, parameter_path: Path,
+           reference_end: str | None = None) -> dict[str, Any]:
     completed = run_command(
         [
             str(config.rust_binary),
@@ -254,7 +255,7 @@ def detect(config: Config, input_path: Path, parameter_path: Path) -> dict[str, 
             str(input_path),
             "--parameters",
             str(parameter_path),
-        ]
+        ] + (["--reference-end", reference_end] if reference_end else [])
     )
     return json.loads(completed.stdout)
 
