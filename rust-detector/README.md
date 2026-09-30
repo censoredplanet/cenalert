@@ -324,9 +324,12 @@ Omitting `--labels` preserves the fully unsupervised workflow.
 
 ### Build a local label file
 
-`scripts/build_labels.py` normalizes the four manually verified CSV sheets into
-the unified JSON schema while retaining their additional fields as metadata. It
-can also reproduce the paper-style automatic verification step:
+`scripts/build_labels.py` normalizes the five reviewed CSV files in
+`label-sources/` into the unified JSON schema, retaining their additional fields
+as metadata. Filtering, Shutdowns, and Other contain country events; Global
+contains multi-country events. Additional Events contains the supplemental
+country and global events supplied on 2026-08-29. The builder can also reproduce
+the paper-style automatic verification step:
 country events from `cenalert-paper/events/custom/Community.csv` are retained
 only when their start date is within the configured proximity of an anomaly
 detected with the paper series and selected parameters.
@@ -337,11 +340,11 @@ From `rust-detector/`, build the detector and run:
 cargo build --release
 
 python3 scripts/build_labels.py \
-  --filtering ../CenAlert_Filtering.csv \
-  --shutdowns ../CenAlert_Shutdowns.csv \
-  --other ../CenAlert_Other.csv \
-  --global-events ../CenAlert_Global.csv \
-  --additional-events "/path/to/New Labels 20206-08-29.csv" \
+  --filtering label-sources/CenAlert_Filtering.csv \
+  --shutdowns label-sources/CenAlert_Shutdowns.csv \
+  --other label-sources/CenAlert_Other.csv \
+  --global-events label-sources/CenAlert_Global.csv \
+  --additional-events label-sources/CenAlert_Additional_Events.csv \
   --exclusions config/label-exclusions.csv \
   --community-events ../../cenalert-paper/events/custom/Community.csv \
   --series-directory ../../cenalert-paper/series/012t0g \
@@ -351,11 +354,13 @@ python3 scripts/build_labels.py \
   --output /tmp/cenalert-labels.json
 ```
 
-The CSV inputs and JSON output can remain outside the repository. Repeat
-`--additional-events` to load reviewed mixed country/global sheets; the
+These source CSVs are versioned; keep generated JSON and experiment outputs
+outside Git. Repeat `--additional-events` to load reviewed mixed country/global sheets; the
 standard nine-column header is optional for these supplemental files. The
-builder validates columns and dates, preserves distinct same-day records, and
-reports such groups for manual review.
+builder validates columns and dates, deduplicates labels with the same scope,
+country, date, and description, and reports distinct same-day records for
+manual review. Country and global records of the same event remain separate.
+Pass the generated JSON to the experiment runner's `--labels` option below.
 
 The manually verified sheets are included as provided; the builder does not
 revalidate those events against the selected time series. Before constrained
