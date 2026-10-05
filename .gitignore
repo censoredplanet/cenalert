@@ -1,5 +1,6 @@
 .DS_Store
 __pycache__/
+/labels.json
 *.py[cod]
 rust-detector/.venv/
 rust-detector/target/

@@ -147,15 +147,38 @@ def convert_series(source: Path, destination: Path, country: str) -> dict[str, A
     }
 
 
+def label_country_code(label: dict[str, Any]) -> str | None:
+    code = label.get("country_code")
+    legacy = label.get("metadata", {}).get("country_code")
+    for value in (code, legacy):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError("label country code must be a nonempty string")
+    if code is not None and legacy is not None and code.strip().upper() != legacy.strip().upper():
+        raise ValueError("label country codes disagree between top level and metadata")
+    value = code if code is not None else legacy
+    return value.strip().upper() if value is not None else None
+
+
 def label_applies(label: dict[str, Any], country: str) -> bool:
     if label["scope"] == "country":
-        code = label.get("country_code")
+        code = label_country_code(label)
         additional = [
             code.upper() for code in label.get("additional_matching_countries", [])
         ]
         return code is None or code.upper() == country or country in additional
     affected = [code.upper() for code in label.get("affected_countries", [])]
     return not affected or country in affected
+
+
+def label_source_summary(label: dict[str, Any]) -> str:
+    metadata = label.get("metadata", {})
+    sources = metadata.get("sources")
+    if isinstance(sources, list):
+        names = [source.get("name") or source.get("url", "")
+                 for source in sources if isinstance(source, dict)]
+        if any(names):
+            return "; ".join(dict.fromkeys(name for name in names if name))
+    return metadata.get("source", "")
 
 
 def label_matches(label: dict[str, Any], anomaly_date: date, proximity_days: int) -> bool:
@@ -180,8 +203,8 @@ def required_labels(
         if label["scope"] == "country"
         and label.get("match_mode", "proximity") == "proximity"
         and (
-            label.get("country_code") is None
-            or label["country_code"].upper() == country
+            label_country_code(label) is None
+            or label_country_code(label) == country
         )
         and (date.fromisoformat(label["date"]) - first).days >= -proximity_days
         and (date.fromisoformat(label["date"]) - last).days <= proximity_days
@@ -567,7 +590,7 @@ def write_outputs(arguments: argparse.Namespace, results: list[dict[str, Any]]) 
                     "description": label.get("description", ""),
                     "category": label.get("metadata", {}).get("category", ""),
                     "verification": label.get("metadata", {}).get("verification", ""),
-                    "source": label.get("metadata", {}).get("source", ""),
+                    "source": label_source_summary(label),
                     "seen_in_any_diagnostic_solution": (
                         label["date"], label.get("description", "")
                     )

@@ -295,7 +295,15 @@ necessarily detectable in every series:
 `country_code` identifies the country whose tuning is constrained.
 `affected_countries` is optional and limits where a global event can be used
 for attribution; an empty list means that its affected countries are not yet
-known. Descriptions and string-valued metadata are optional. In the matching
+known. Descriptions, titles, stable IDs, and metadata are optional. Metadata
+accepts JSON values, including legacy strings, `affected_services` arrays,
+structured `sources` arrays, and `cause`/`justification` fields. Supplied `id`
+values are preserved; reading labels never generates or changes IDs. During
+migration, `metadata.country_code` is accepted when the top-level country code
+is absent; conflicting codes are rejected. Keep private label updates outside
+Git (the repository-root `labels.json` is ignored), and pass their path directly
+to `--labels`. Do not regenerate these curated files from the historical CSVs.
+In the matching
 API, a country event is preferred when it and a global event are equally close
 to an anomaly. A country label without `country_code`, as in the exact-match
 example, applies to any country series processed with that label file. This
@@ -390,6 +398,51 @@ attribution, while the event constrains tuning only for its owning
   "description": "Example Russia event also relevant to Ukraine"
 }
 ```
+
+### Export a daily SQLite snapshot
+
+`scripts/build_snapshot.py` runs detection with fixed per-country parameters and
+exports a complete SQLite database. It accepts `<CC>_stitched.csv`, `<CC>.csv`
+(date/value columns), or `<CC>.json` series and `<CC>.json` parameter files.
+Supply exactly one series per requested country. Run from `rust-detector/`:
+
+```bash
+cargo build --release --locked
+python3 scripts/build_snapshot.py \
+  --series-directory /path/to/stitched/vpn \
+  --parameters-directory /path/to/ensemble-parameters \
+  --labels ../labels.json \
+  --rust-binary target/release/cenalert-detector \
+  --algorithm ensemble \
+  --topic vpn \
+  --countries RU SS \
+  --output /path/to/output/cenalert.sqlite
+```
+
+List every country to publish: each run replaces the entire snapshot, including
+removing previous countries/events absent from the new results. Missing inputs
+or a failed detector abort publication and leave the previous database intact.
+The new database is built and validated beside the destination before atomic
+replacement. Run one publisher at a time; consumers should open the snapshot
+read-only and reopen after replacement.
+
+Schema version 1 contains `metadata`, `countries`, `series`, `labels`, and
+`events`. Series values use the detector's output scale. Each country records
+its algorithm, resolved parameters, and scale factor. Events include raw
+anomalies, nearest-label attribution, display fields, and the original anomaly
+payload. `affected_services` and `sources` are JSON arrays stored in TEXT
+columns; full labels are retained as JSON. Legacy service descriptions remain
+a single array entry so prose containing commas is preserved.
+
+`labels.label_index` is snapshot-local; only a supplied `stable_id` is suitable
+for durable links. No IDs are generated. Matching retains the existing ±3-day
+default and country-over-global tie preference. A match is temporal attribution,
+not additional manual verification.
+
+This command consumes already-stitched data. It does not download data, tune
+parameters, apply notification filters, send Slack messages, or publish to
+ClickHouse. The SQLite schema is an initial integration format pending agreement
+with the consumer. Private labels and generated databases must stay outside Git.
 
 ### Run the temporal evaluation
 

@@ -49,8 +49,12 @@ pub struct EventLabel {
     pub additional_matching_countries: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, String>,
+    pub metadata: BTreeMap<String, serde_json::Value>,
 }
 
 impl EventLabel {
@@ -63,6 +67,8 @@ impl EventLabel {
             affected_countries: Vec::new(),
             additional_matching_countries: Vec::new(),
             description: None,
+            title: None,
+            id: None,
             metadata: BTreeMap::new(),
         }
     }
@@ -90,6 +96,7 @@ pub enum LabelInputError {
     Io(std::io::Error),
     Json(serde_json::Error),
     Empty,
+    InvalidCountryCode,
 }
 
 impl fmt::Display for LabelInputError {
@@ -98,6 +105,7 @@ impl fmt::Display for LabelInputError {
             Self::Io(error) => write!(formatter, "failed to read labels: {error}"),
             Self::Json(error) => write!(formatter, "invalid label JSON: {error}"),
             Self::Empty => formatter.write_str("label list is empty"),
+            Self::InvalidCountryCode => formatter.write_str("label country codes must be nonempty strings and agree between top level and metadata"),
         }
     }
 }
@@ -107,7 +115,7 @@ impl Error for LabelInputError {
         match self {
             Self::Io(error) => Some(error),
             Self::Json(error) => Some(error),
-            Self::Empty => None,
+            Self::Empty | Self::InvalidCountryCode => None,
         }
     }
 }
@@ -125,9 +133,33 @@ impl From<serde_json::Error> for LabelInputError {
 }
 
 pub fn parse_labels_json<R: Read>(reader: R) -> Result<Vec<EventLabel>, LabelInputError> {
-    let labels: Vec<EventLabel> = serde_json::from_reader(reader)?;
+    let mut labels: Vec<EventLabel> = serde_json::from_reader(reader)?;
     if labels.is_empty() {
         return Err(LabelInputError::Empty);
+    }
+    for label in &mut labels {
+        let legacy = label
+            .metadata
+            .get("country_code")
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|code| !code.trim().is_empty())
+                    .ok_or(LabelInputError::InvalidCountryCode)
+            })
+            .transpose()?;
+        if let Some(code) = &label.country_code {
+            if code.trim().is_empty()
+                || legacy.is_some_and(|other| !code.trim().eq_ignore_ascii_case(other.trim()))
+            {
+                return Err(LabelInputError::InvalidCountryCode);
+            }
+        }
+        label.country_code = label
+            .country_code
+            .as_deref()
+            .or(legacy)
+            .map(|code| code.trim().to_ascii_uppercase());
     }
     Ok(labels)
 }
@@ -266,6 +298,51 @@ mod tests {
             sparse: false,
             component_starts: Vec::new(),
             ensemble_vote: None,
+        }
+    }
+
+    #[test]
+    fn preserves_mixed_metadata_and_optional_identity() {
+        let input = serde_json::json!([
+            {"date":"2025-01-10", "scope":"country", "country_code":"AA",
+             "title":"Example outage", "id":"example-id", "metadata":{
+                "affected_services":["Example Chat"],
+                "sources":[{"type":"news","name":"Example News","url":"https://example.com"}],
+                "cause":"protests", "justification":"public safety"}},
+            {"date":"2025-01-11", "scope":"global", "metadata":{
+                "affected_services":"Example service, with legacy description", "source":"Other", "link":"https://example.org"}}
+        ]);
+        let labels = parse_labels_json(input.to_string().as_bytes()).unwrap();
+        assert_eq!(serde_json::to_value(&labels).unwrap(), input);
+        assert_eq!(required_country_labels(&labels, Some("AA")).len(), 1);
+        assert!(required_country_labels(&labels, Some("BB")).is_empty());
+    }
+
+    #[test]
+    fn nested_country_code_does_not_constrain_other_countries() {
+        let labels = parse_labels_json(
+            br#"[{"date":"2025-01-10","scope":"country","metadata":{"country_code":" aa "}}]"#
+                .as_slice(),
+        )
+        .unwrap();
+        assert_eq!(labels[0].country_code.as_deref(), Some("AA"));
+        assert_eq!(required_country_labels(&labels, Some("AA")).len(), 1);
+        assert!(required_country_labels(&labels, Some("BB")).is_empty());
+        assert!(match_anomaly_to_label(&anomaly("2025-01-10"), &labels, Some("BB"), 3).is_none());
+    }
+
+    #[test]
+    fn rejects_invalid_or_conflicting_country_codes() {
+        for metadata in [
+            serde_json::json!({"country_code":"BB"}),
+            serde_json::json!({"country_code":[]}),
+            serde_json::json!({"country_code":""}),
+        ] {
+            let input = serde_json::json!([{"date":"2025-01-10","scope":"country","country_code":"AA","metadata":metadata}]);
+            assert!(matches!(
+                parse_labels_json(input.to_string().as_bytes()),
+                Err(LabelInputError::InvalidCountryCode)
+            ));
         }
     }
 
