@@ -48,7 +48,7 @@ pub struct EnsembleParameters {
     pub lof_min_score: f64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AnnotatedObservation {
     pub date: NaiveDate,
     pub value: f64,

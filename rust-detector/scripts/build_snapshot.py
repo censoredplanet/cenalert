@@ -30,6 +30,12 @@ CREATE TABLE series (
     country TEXT NOT NULL REFERENCES countries(country), date TEXT NOT NULL,
     value REAL NOT NULL, PRIMARY KEY(country, date)
 );
+CREATE TABLE annotated (
+    country TEXT NOT NULL, date TEXT NOT NULL,
+    payload TEXT NOT NULL CHECK(json_valid(payload)),
+    PRIMARY KEY(country, date),
+    FOREIGN KEY(country, date) REFERENCES series(country, date)
+);
 CREATE TABLE events (
     country TEXT NOT NULL REFERENCES countries(country), start TEXT NOT NULL,
     end TEXT NOT NULL, peak TEXT NOT NULL, impact REAL NOT NULL,
@@ -124,7 +130,7 @@ def build_snapshot(args):
             connection.execute("PRAGMA foreign_keys=ON")
             connection.executescript(SCHEMA)
             connection.executemany("INSERT INTO metadata VALUES (?, ?)", [
-                ("schema_version", "1"), ("created_at", datetime.now(timezone.utc).isoformat()),
+                ("schema_version", "2"), ("created_at", datetime.now(timezone.utc).isoformat()),
                 ("event_layer", "raw"), ("proximity_days", str(args.proximity_days)),
                 ("reference_policy", "full_series_maximum"),
             ])
@@ -136,9 +142,13 @@ def build_snapshot(args):
                 parameter_file = work / "parameters.json"
                 source.write_text(json.dumps(rows))
                 parameter_file.write_text(json.dumps(parameters))
-                process = subprocess.run([str(args.rust_binary.resolve()), "detect",
-                    "--input", str(source), "--parameters", str(parameter_file),
-                    "--algorithm", args.algorithm], capture_output=True, text=True, check=True)
+                try:
+                    process = subprocess.run([str(args.rust_binary.resolve()), "detect",
+                        "--input", str(source), "--parameters", str(parameter_file),
+                        "--algorithm", args.algorithm, "--include-annotated"], capture_output=True, text=True, check=True)
+                except subprocess.CalledProcessError as error:
+                    detail = (error.stderr or "").strip() or "no diagnostic output"
+                    raise RuntimeError(f"{country}: detection failed (exit {error.returncode}): {detail}") from None
                 detection = json.loads(process.stdout)
                 scale = detection["scale_factor"]
                 if not math.isfinite(scale) or scale <= 0:
@@ -147,6 +157,14 @@ def build_snapshot(args):
                     (country, args.topic, args.algorithm, json.dumps(detection["parameters"]), scale))
                 connection.executemany("INSERT INTO series VALUES (?, ?, ?)",
                     [(country, row["date"], row["rate"] / scale) for row in rows])
+                annotated = detection["annotated"]
+                if [point["date"] for point in annotated] != [row["date"] for row in rows]:
+                    raise ValueError("annotated dates disagree with input series")
+                for point, row in zip(annotated, rows):
+                    if not math.isclose(point["value"], row["rate"] / scale):
+                        raise ValueError("annotated values disagree with output scale")
+                connection.executemany("INSERT INTO annotated VALUES (?, ?, ?)",
+                    [(country, point["date"], json.dumps(point, allow_nan=False)) for point in annotated])
                 for anomaly in detection["anomalies"]:
                     if not all(isinstance(anomaly[k], (int, float)) and math.isfinite(anomaly[k])
                                for k in ("impact", "score", "residual")):

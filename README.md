@@ -2,7 +2,12 @@
 
 This repository contains the implementation of the *CenAlert* deployment.
 
-**Note: CenAlert requires a Google Trends API key and Slack token to run.** 
+The Rust-backed daily pipeline is documented in
+[rust-detector/README.md](rust-detector/README.md#daily-pipeline-and-e2e-testing).
+It supports offline inputs and Google Trends downloads, and publishes SQLite
+snapshots with local notification previews. Live downloads require an API key;
+this pipeline does not send Slack messages. The instructions below describe the
+legacy Python deployment, including its Slack integration.
 
 ---
 

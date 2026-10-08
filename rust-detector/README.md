@@ -426,8 +426,8 @@ The new database is built and validated beside the destination before atomic
 replacement. Run one publisher at a time; consumers should open the snapshot
 read-only and reopen after replacement.
 
-Schema version 1 contains `metadata`, `countries`, `series`, `labels`, and
-`events`. Series values use the detector's output scale. Each country records
+Schema version 2 contains `metadata`, `countries`, `series`, `annotated`,
+`labels`, and `events`. Series values use the detector's output scale. Each country records
 its algorithm, resolved parameters, and scale factor. Events include raw
 anomalies, nearest-label attribution, display fields, and the original anomaly
 payload. `affected_services` and `sources` are JSON arrays stored in TEXT
@@ -443,6 +443,183 @@ This command consumes already-stitched data. It does not download data, tune
 parameters, apply notification filters, send Slack messages, or publish to
 ClickHouse. The SQLite schema is an initial integration format pending agreement
 with the consumer. Private labels and generated databases must stay outside Git.
+
+To export per-country files for plotting and downstream compatibility:
+
+```bash
+python3 scripts/export_snapshot.py \
+  --database /path/to/output/cenalert.sqlite \
+  --output-directory /path/to/output/detection-run
+```
+
+Use a new output directory for each export. Each country directory contains
+`annotated.csv`, `anomalies.csv`, `parameters.json`, and `detector.json`.
+CSV columns retain the legacy names, including impact-ranked quartiles.
+The complete structured labels and ensemble vote details remain in SQLite.
+The legacy Slack sender remains unchanged and should not consume these files
+directly. Use the snapshot preview below to inspect algorithm-aware messages.
+
+For individual runs, `detect --include-annotated` includes daily diagnostics in
+the detection JSON; the default output remains unchanged.
+
+### Preview notifications
+
+```bash
+python3 scripts/preview_notifications.py \
+  --database /path/to/output/cenalert.sqlite \
+  --output-directory /path/to/output/notification-preview
+```
+
+The preview writes text files and a manifest; it never contacts Slack. Dates use
+UTC by default. `--as-of YYYY-MM-DD` chooses the reporting date: events starting
+the previous day are new, those continuing through that day are ongoing, and
+those ending two days earlier are ended. Countries without observations through
+the previous day are listed as stale and skipped. Use a new output directory
+for each run. This inspects raw snapshot anomalies; notification filtering and
+delivery deduplication are not connected yet.
+
+Add `--plots` for PNG charts (requires `matplotlib==3.10.3`). Ensemble messages
+show member votes at anomaly onset; sparse messages show the Croston residual.
+Other detector scores retain their algorithm-specific meaning. A historical
+`--as-of` inspects the supplied snapshot, including any later observations used
+to produce it; it does not recreate what the system knew on that date.
+
+### Daily pipeline and E2E testing
+
+`scripts/run_daily.py` connects Google Trends collection, the existing Python
+stitching functions, fixed-parameter Rust detection, SQLite export, CSV export,
+and local notification preview. Supply fixed JSON parameters selected before
+the run. Use this script as the daily entry point; ClickHouse ingestion and
+notification delivery are separate deployment steps.
+
+From `rust-detector/`, prepare the runtime:
+
+Use Python 3.10 or newer (tested with 3.13) on Linux or macOS.
+
+```bash
+cargo build --release --locked
+python3 -m venv .venv-runtime
+.venv-runtime/bin/python -m pip install -r requirements-runtime.txt
+```
+
+Start with an offline E2E run using existing Dashboard JSON or stitched CSVs:
+
+```bash
+.venv-runtime/bin/python scripts/run_daily.py \
+  --series-directory /path/to/series \
+  --parameters-directory /path/to/ensemble-parameters \
+  --labels ../labels.json --countries RU SS \
+  --through-date YYYY-MM-DD \
+  --output-root /path/outside/git/daily-e2e
+```
+
+Set `--through-date` to a date covered by every selected country; inputs are
+trimmed to that date. Every retained calendar day must be present (zero-valued
+days are valid). In daily use it defaults to yesterday in UTC. Stale or gapped
+data aborts publication. Add `--plan` to check local paths and JSON syntax
+without running stages; actual parameter and label semantics are validated
+by detection. Add `--plots` to render preview charts.
+
+For live collection, replace `--series-directory` with `--download` and provide
+`--api-key-file /private/path/api_key.txt` (or `GOOGLE_TRENDS_API_KEY`). Never put
+the key itself in command arguments or Git. Without `--previous-stitched`, the
+pipeline collects from `--start-month` (default `2011-01`) and bootstraps both
+normal and coarse series. For a small live smoke test, use one country,
+`--sample-count 1`, and a recent `--start-month`. Short history and fewer samples
+are only for integration testing, not production detection comparisons.
+
+```bash
+.venv-runtime/bin/python scripts/run_daily.py \
+  --download --api-key-file /private/path/api_key.txt \
+  --start-month 2026-01 --sample-count 1 --countries RU \
+  --parameters-directory /path/to/ensemble-parameters \
+  --labels ../labels.json --output-root /path/outside/git/live-smoke
+```
+
+The API can lag behind yesterday. If freshness validation fails, inspect the
+availability and choose an explicit earlier `--through-date` for testing.
+Collection is sequential, with retries; production defaults to 45 samples and
+can take substantially longer than detection. No API calls are made in offline
+mode. To replay previously downloaded samples, use `--samples-directory` with
+`sample0/<CC>/…`, `sample1/<CC>/…`, etc., and the corresponding `--sample-count`.
+Window filenames and dates must agree across samples, with paired normal and
+coarse files.
+
+After a successful initial live run, incremental collection reuses its history:
+
+```bash
+.venv-runtime/bin/python scripts/run_daily.py \
+  --download --api-key-file /private/path/api_key.txt \
+  --previous-stitched /path/outside/git/daily/current/stitched \
+  --parameters-directory /path/to/ensemble-parameters \
+  --labels ../labels.json --countries RU SS \
+  --output-root /path/outside/git/daily
+```
+
+Incremental stitching requires both `<CC>_stitched.csv` and
+`<CC>_coarse_stitched.csv`; a Dashboard export alone cannot seed that mode.
+The recent-window collection follows the legacy 8-month/7-month-overlap policy.
+The previous stitching files are read-only. Each run publishes a new directory:
+
+```text
+current -> run-<UTC timestamp>/
+  cenalert.sqlite
+  stitched/          # normal series; coarse history when stitching was run
+  detection/         # per-country CSVs and resolved JSON parameters
+  preview/           # local text, manifest, optional charts
+  parameters/        # supplied fixed parameters
+  labels.json        # private input snapshot
+  samples/           # present for live downloads
+  run.json           # coverage and run settings
+```
+
+All countries must succeed before `current` switches atomically. A failure
+leaves the previous published run intact and retains inputs and partial outputs
+in `failed-<id>/`. After a downstream failure, replay the completed collection
+using `--samples-directory /path/to/failed-<id>/samples`, or reuse its completed
+`stitched/` directory with `--series-directory`. Incomplete downloads require
+a new collection. Concurrent runs sharing an output root are rejected.
+Previous and failed runs are retained, so monitor disk usage. Keep the
+entire output root private and outside Git. The preview currently uses raw
+anomalies; composing the notification filters and delivery deduplication remains
+separate integration work.
+
+Run regression tests with the runtime environment after building the detector:
+
+```bash
+.venv-runtime/bin/python -m unittest discover -s scripts -p 'test_*.py'
+```
+
+Tests cover initial and incremental stitching, real local Rust execution,
+missing/stale input, failed download/export, and preservation of the previous
+published run. They make no external API requests.
+
+### Daily pipeline container
+
+From `rust-detector/`, build with
+`docker build -f Dockerfile -t cenalert-detector ..`.
+The container includes downloading, stitching, detection, exporters, and local
+preview. `Dockerfile.dockerignore` restricts the build context to runtime source
+files; labels, input data, and experiment results are excluded.
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v /absolute/path/to/input:/input:ro \
+  -v /absolute/path/to/output:/output \
+  cenalert-detector python scripts/run_daily.py \
+  --series-directory /input/series \
+  --parameters-directory /input/parameters \
+  --labels /input/labels.json \
+  --rust-binary /usr/local/bin/cenalert-detector \
+  --countries RU SS --output-root /output
+```
+
+Create the output directory first. Select all countries intended for the
+snapshot. Replace the Python command with `scripts/export_snapshot.py` or
+`scripts/preview_notifications.py` to run those tools with the same mounts.
+The image uses portable release settings without `target-cpu=native`.
+Before deployment, validate the image with your inputs in the isolated testing
+environment.
 
 ### Run the temporal evaluation
 

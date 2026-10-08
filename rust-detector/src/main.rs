@@ -39,6 +39,9 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct DetectArgs {
+    /// Include daily values and detector diagnostics in the JSON output.
+    #[arg(long)]
+    include_annotated: bool,
     /// Freeze Croston and output scaling to the maximum through this training date.
     #[arg(long)]
     reference_end: Option<chrono::NaiveDate>,
@@ -166,6 +169,8 @@ struct DetectorOutput<P> {
     parameters: P,
     scale_factor: f64,
     anomalies: Vec<Anomaly>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    annotated: Option<Vec<cenalert_detector::AnnotatedObservation>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -336,17 +341,35 @@ fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
                 detector = detector.with_reference_maximum(maximum);
             }
             let result = detector.detect(&observations);
-            write_detection_output("chebyshev", &observations, parameters, result)
+            write_detection_output(
+                "chebyshev",
+                &observations,
+                parameters,
+                result,
+                arguments.include_annotated,
+            )
         }
         DetectionAlgorithm::Lof => {
             let parameters = parse_outlier_parameters_json(parameter_file)?;
             let result = LocalOutlierFactorDetector::new(parameters).detect(&observations);
-            write_detection_output("lof", &observations, parameters, result)
+            write_detection_output(
+                "lof",
+                &observations,
+                parameters,
+                result,
+                arguments.include_annotated,
+            )
         }
         DetectionAlgorithm::IsolationForest => {
             let parameters = parse_outlier_parameters_json(parameter_file)?;
             let result = IsolationForestDetector::new(parameters).detect(&observations);
-            write_detection_output("isolation-forest", &observations, parameters, result)
+            write_detection_output(
+                "isolation-forest",
+                &observations,
+                parameters,
+                result,
+                arguments.include_annotated,
+            )
         }
         DetectionAlgorithm::Ensemble => {
             let parameters = parse_ensemble_parameters_json(parameter_file)?;
@@ -355,7 +378,13 @@ fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
                 detector = detector.with_reference_maximum(maximum);
             }
             let result = detector.detect(&observations);
-            write_detection_output("ensemble", &observations, parameters, result)
+            write_detection_output(
+                "ensemble",
+                &observations,
+                parameters,
+                result,
+                arguments.include_annotated,
+            )
         }
     }
 }
@@ -365,6 +394,7 @@ fn write_detection_output<P: Serialize>(
     observations: &[cenalert_detector::Observation],
     parameters: P,
     result: DetectionResult,
+    include_annotated: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut countries: Vec<String> = observations
         .iter()
@@ -398,6 +428,7 @@ fn write_detection_output<P: Serialize>(
         parameters,
         scale_factor: result.scale_factor,
         anomalies: result.anomalies,
+        annotated: include_annotated.then_some(result.annotated),
     };
 
     serde_json::to_writer_pretty(io::stdout().lock(), &output)?;

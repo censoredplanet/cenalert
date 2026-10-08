@@ -40,7 +40,7 @@ def tlvl_gparse(graph, dest, fname):
     else:
         return 0
 
-def get_multi_timeline(service, logger, dest,fname, start_date_str, end_date_str, country_code, topic: str = VPN_GT_TOPIC_CODE, attempts=10):
+def get_multi_timeline(service, logger, dest,fname, start_date_str, end_date_str, country_code, topic: str = VPN_GT_TOPIC_CODE, attempts=10, strict=False):
     # append a random string to force api refresh
     random_str = generate_random_string(20)
     topics = f"{topic} + {random_str} + {topic.upper()}"
@@ -53,15 +53,28 @@ def get_multi_timeline(service, logger, dest,fname, start_date_str, end_date_str
             if(len(response) > 0):
                 datanorm = response['lines'][0]['points']
                 data = pd.json_normalize(datanorm)
+                if strict and (data.empty or not {'date', 'value'}.issubset(data.columns)):
+                    raise ValueError('empty or malformed Google Trends response')
                 data.to_csv(os.path.join(dest,fname),index=False)
+                return
+            if strict:
+                raise ValueError('empty Google Trends response')
             return
         except Exception as error:
-            error_check(logger, error, (i + 1) * 61)
+            if strict:
+                # API exception strings can include the credential-bearing URL.
+                logger.warning('Google Trends request failed for %s (attempt %s/%s)', country_code, i + 1, attempts)
+                if i + 1 < attempts:
+                    time.sleep(min(60, (i + 1) * 5))
+            else:
+                error_check(logger, error, (i + 1) * 61)
+    if strict:
+        raise RuntimeError(f'Google Trends download failed for {country_code}: {fname}') from None
     time.sleep(1)
     logger.critical(f"Unable to retrieve multiTimeline file for {country_code} with start date {start_date_str} and end date {end_date_str}")     
 
 def get_multi_timeline_windows(service, logger, dest, start_date_str, window_s_str,
-end_date_str, country_code, topic=VPN_GT_TOPIC_CODE, window=8, overlap=1):
+end_date_str, country_code, topic=VPN_GT_TOPIC_CODE, window=8, overlap=1, strict=False):
     start_datetime = datetime.datetime.strptime(start_date_str, '%Y-%m')
     end_datetime = datetime.datetime.strptime(end_date_str, '%Y-%m')
     today = datetime.datetime.strptime(CURRENT_DATE_STR, DATE_FORMAT)
@@ -87,12 +100,12 @@ end_date_str, country_code, topic=VPN_GT_TOPIC_CODE, window=8, overlap=1):
         
         
         get_multi_timeline(service, logger, dest, fname, window_s_str, 
-                           window_e_str, country_code, topic)
+                           window_e_str, country_code, topic, strict=strict)
         
             
         get_multi_timeline(service, logger, dest, 
                             f"{window_s_str}_coarseMultiTimeline.csv", start_date_str, window_e_str, 
-                            country_code, topic)
+                            country_code, topic, strict=strict)
 
         window_start += relativedelta(months=(window - overlap))
 
@@ -108,6 +121,7 @@ end_date_str, country_code, topic=VPN_GT_TOPIC_CODE, window=8, overlap=1):
                         df.to_csv(file_path, index=False)
                         logger.info(f"Removed last row from final window file: {file_path}")
                 except Exception as e:
+                    if strict:
+                        raise RuntimeError(f'Failed to trim final window for {country_code}') from None
                     logger.warning(f"Failed to clean last row of {file_path}: {e}")
             break
-   

@@ -3,4 +3,6 @@ __pycache__/
 /labels.json
 *.py[cod]
 rust-detector/.venv/
+rust-detector/.venv-runtime/
+/api_key.txt
 rust-detector/target/
