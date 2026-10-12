@@ -127,9 +127,9 @@ cargo run --release -- \
   --parameters /path/to/ensemble-parameters.json
 ```
 
-The ensemble's reported threshold is the minimum of its three member
-thresholds. Sparse observations use the single shared
-Croston path rather than voting three times.
+The ensemble's impact threshold is the second-smallest of its three member
+thresholds, approximating the value needed for a majority vote. Sparse
+observations use the single shared Croston path.
 
 The Croston residual ratio is `(value - forecast) / time_series_maximum` and
 must be in `[0, 1]`. This makes sparse detection invariant to multiplicative
@@ -949,33 +949,15 @@ committing the source series or generated inputs:
   --workers 6
 ```
 
-The recorded run covers all 76 paper countries. Chebyshev uses each country's
-selected paper parameters; Isolation Forest, LOF, and ensemble use the fixed
-implementation-validation parameters shown above. These fixed parameters test
-parity and are not proposed production selections.
-
-| Algorithm | Country runs | Anomaly count and dates | Metadata within configured tolerance | Impact-only differences |
-| --- | ---: | ---: | ---: | ---: |
-| Chebyshev | 72 | 72 | 72 | 0 |
-| Isolation Forest | 76 | 76 | 57 | 19 |
-| LOF | 76 | 76 | 75 | 1 |
-| Ensemble | 72 | 72 | 64 | 8 |
+Chebyshev uses each country's selected paper parameters. Isolation Forest,
+LOF, and ensemble use the fixed validation parameters shown above. The JSON
+report includes anomaly counts, date agreement, metadata differences, and
+skipped or failed runs for each country and algorithm.
 
 Chebyshev skips ER, KP, LR, and ME because their all-zero series have no
 selected paper parameter file. Ensemble parity also skips these all-zero
 series because the Python reference does not initialize a Croston forecast for
-them; the standalone outlier detectors process and match them with zero
-anomalies. Across all 296 executed country/algorithm
-runs, Rust and Python have identical anomaly counts, start dates, end dates,
-and peak dates. The 28 remaining report mismatches are impact values only:
-Isolation Forest's stepwise score can make the two bounded optimizers choose
-different, equally scoring points in a flat threshold interval. Initial score
-and residual still match.
-
-The cross-country run exposed two sparse-state edge cases that the original RU
-and SS checks did not cover: simultaneous anomaly-ending conditions and
-StatsForecast's treatment of NaNs introduced by sparse-window rescaling. Both
-are covered by regression tests.
+them. The standalone outlier detectors process these series.
 
 ### Runtime benchmark
 

@@ -81,14 +81,17 @@ impl DenseScorer for EnsembleScorer {
     }
 
     fn threshold(&mut self, window: &mut SlidingWindow, value: f64) -> f64 {
-        [
+        majority_threshold([
             self.chebyshev.threshold(window, value),
             self.isolation_forest.threshold(window, value),
             self.lof.threshold(window, value),
-        ]
-        .into_iter()
-        .fold(f64::INFINITY, f64::min)
+        ])
     }
+}
+
+fn majority_threshold(mut thresholds: [f64; 3]) -> f64 {
+    thresholds.sort_by(f64::total_cmp);
+    thresholds[usize::from(REQUIRED_VOTES) - 1]
 }
 
 fn ensemble_vote(
@@ -116,6 +119,62 @@ fn ensemble_vote(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn threshold_is_second_smallest_in_any_member_order() {
+        for thresholds in [
+            [10.0, 20.0, 30.0],
+            [10.0, 30.0, 20.0],
+            [20.0, 10.0, 30.0],
+            [20.0, 30.0, 10.0],
+            [30.0, 10.0, 20.0],
+            [30.0, 20.0, 10.0],
+        ] {
+            assert_eq!(majority_threshold(thresholds), 20.0);
+        }
+    }
+
+    #[test]
+    fn threshold_preserves_ties_and_unreachable_member_thresholds() {
+        assert_eq!(majority_threshold([10.0, 10.0, 30.0]), 10.0);
+        assert_eq!(majority_threshold([10.0, 30.0, 30.0]), 30.0);
+        assert_eq!(majority_threshold([10.0, 20.0, f64::INFINITY]), 20.0);
+        assert_eq!(
+            majority_threshold([10.0, f64::INFINITY, f64::INFINITY]),
+            f64::INFINITY
+        );
+    }
+
+    #[test]
+    fn scorer_uses_the_majority_member_threshold() {
+        let mut window = SlidingWindow::new(60);
+        for index in 0..60 {
+            window.insert(10.0 + (index % 7) as f64, index + 1);
+        }
+        let mut scorer = EnsembleScorer {
+            chebyshev: ChebyshevScorer::new(DetectorParameters {
+                window: 60,
+                z: 4.0,
+                k: 6.0,
+                min_residual_ratio: 0.05,
+                efficiency: 0.05,
+            }),
+            isolation_forest: IsolationForestScorer { minimum_score: 0.8 },
+            lof: LocalOutlierFactorScorer {
+                window: 60,
+                minimum_score: 1.5,
+            },
+        };
+        scorer.evaluate(&mut window, 100.0);
+        let mut thresholds = [
+            scorer.chebyshev.threshold(&mut window, 100.0),
+            scorer.isolation_forest.threshold(&mut window, 100.0),
+            scorer.lof.threshold(&mut window, 100.0),
+        ];
+        thresholds.sort_by(f64::total_cmp);
+        assert!(thresholds[0] < thresholds[1]);
+        assert_eq!(scorer.threshold(&mut window, 100.0), thresholds[1]);
+    }
 
     #[test]
     fn counts_member_votes_and_requires_a_majority() {

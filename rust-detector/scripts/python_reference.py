@@ -71,7 +71,8 @@ class Ensemble(AnomalyDetector):
         )
 
     def threshold(self, initial_guess):
-        return min(detector.threshold(initial_guess) for detector in self.detectors)
+        thresholds = sorted(detector.threshold(initial_guess) for detector in self.detectors)
+        return thresholds[len(thresholds) // 2]
 
 
 def parse_arguments() -> argparse.Namespace:
