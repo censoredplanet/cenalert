@@ -228,9 +228,8 @@ jointly tunes:
 2. the Chebyshev Z and K thresholds;
 3. the Isolation Forest and LOF minimum scores.
 
-The ranges come from the paper's individual detector searches. Because
-efficiency is shared, its ensemble range is the common `0.05–0.1` interval.
-The residual-ratio range is `[0, 1]`.
+The ensemble efficiency range is `[0.05, 0.1]`, the residual-ratio range is
+`[0, 1]`, and the LOF minimum-score range is `[1.1, 3.0]`.
 
 ```bash
 cargo run --release -- \
