@@ -742,6 +742,25 @@ unlabeled ensemble-only review CSV. Tables use countries completed by all five
 configurations. Training coverage is computed from the saved detection outputs
 and label snapshot. Upload the figure PDFs to `figures/` in the manuscript.
 
+### Review held-out notification candidates
+
+```bash
+python3 scripts/review_contextualization.py \
+  --results /path/to/four-group-experiment \
+  --output /path/to/contextualization-review
+```
+
+For a completed single-seed experiment, this reviews every successful
+label-constrained ensemble country under knee and leftmost selection. It uses
+the saved Rust binary for sparse coalescing and cross-country grouping.
+Impact thresholds are calibrated on coalesced, label-matched training
+anomalies and held fixed for the test period. Countries with no calibration
+match retain all candidates. Intervals crossing the training cutoff are
+excluded from calibration. `--sparse-gap-days` defaults to one.
+The report compares grouping at four and five countries; `analysis.json`
+contains per-country stages, lost test labels, attribution conflicts, and
+notification groups. This command does not retune or send notifications.
+
 ### Run all-country ensemble tuning
 
 `scripts/batch_ensemble_tuning.py` runs the complete constrained workflow for
