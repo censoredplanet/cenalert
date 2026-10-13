@@ -725,6 +725,23 @@ Run the experiment regression tests after building the release binary:
 python3 -m unittest discover -s scripts -p test_experiment_matrix.py -v
 ```
 
+### Generate manuscript tables and figures
+
+For a completed single-seed temporal experiment, use Python with NumPy and
+Matplotlib installed:
+
+```bash
+python3 scripts/summarize_temporal_results.py \
+  --results /path/to/four-group-experiment \
+  --output /path/to/paper-results
+```
+
+The output contains `results.tex`, English and Chinese summaries, an evaluation
+matrix, member-vote and Pareto-front figures, an all-country Pareto PDF, and an
+unlabeled ensemble-only review CSV. Tables use countries completed by all five
+configurations. Training coverage is computed from the saved detection outputs
+and label snapshot. Upload the figure PDFs to `figures/` in the manuscript.
+
 ### Run all-country ensemble tuning
 
 `scripts/batch_ensemble_tuning.py` runs the complete constrained workflow for
