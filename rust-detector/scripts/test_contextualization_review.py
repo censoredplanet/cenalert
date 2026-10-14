@@ -7,10 +7,97 @@ from pathlib import Path
 from review_contextualization import (
     coverage, evaluation_labels, notification_matches, ordering_cases, retain_by_impact,
     unmatched_notification_rows, write_unmatched_notifications,
+    calibration_evidence, common_completed_countries, low_impact_rows,
+    transport_scores, restore_null_scores,
+    write_low_impact_review, write_paper_table,
+    write_configuration_summary,
 )
 
 
 class ContextualizationReviewTests(unittest.TestCase):
+    def test_summary_csv_reports_notifications_and_retained_labels(self):
+        summary = {"original/knee": dict(variant="original", selection="knee", countries=2,
+                   raw=10, coalesced=9, retained=7, raw_covered=3, retained_covered=2,
+                   labels_total=4, low_impact_retained=1,
+                   notification_matching={"5": dict(total=6, matched=4)})}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "summary.csv"
+            write_configuration_summary(path, summary)
+            with path.open() as stream:
+                row, = csv.DictReader(stream)
+        self.assertEqual(row["unmatched_notifications"], "2")
+        self.assertEqual(row["country_labels_after"], "2")
+        self.assertEqual(row["raw_anomalies"], "10")
+
+    def test_low_impact_export_keeps_calibration_and_test_matches_separate(self):
+        calibration_label = dict(date="2024-01-01", scope="global", description="Outage")
+        test_label = dict(date="2026-01-01", scope="country", country_code="RU", description="Block")
+        record = dict(variant="labels_ensemble", selection="knee", country="RU",
+                      anomaly=dict(start="2026-01-01", end="2026-01-02", impact=.5),
+                      threshold=.1, reason="above_calibrated_threshold",
+                      threshold_sources=[dict(anomaly=dict(start="2024-01-01"), labels=[calibration_label])])
+        matching = dict(individuals=[dict(country="RU", start="2026-01-01", labels=[test_label])], groups=[])
+        analysis = dict(all_configurations=True, low_impact_retained=[record],
+                        available_grouping={"labels_ensemble/knee": {"5": {"label_matching": matching}}})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "low.csv"
+            write_low_impact_review(path, analysis)
+            with path.open() as stream:
+                rows = list(csv.DictReader(stream))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["calibration_events"], "Outage")
+        self.assertEqual(rows[0]["test_label_matches"], "2026-01-01 Block")
+
+    def test_paper_table_uses_post_filter_coverage(self):
+        summary = {"fixed_3sigma/fixed": dict(variant="fixed_3sigma", selection="fixed", raw=8,
+                   retained_covered=2, labels_total=3,
+                   notification_matching={"5": dict(total=4, matched=3)})}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "table.tex"
+            write_paper_table(path, summary)
+            text = path.read_text()
+        self.assertIn(r"Fixed $3\sigma$ & -- & 8 & 4 & 3 & 2/3", text)
+        self.assertIn(r"\label{tab:contextualization}", text)
+
+    def test_null_scores_round_trip_without_changing_measurements(self):
+        original = [dict(country="RU", start="2024-01-01", score=None, impact=2),
+                    dict(country="TR", start="2024-01-01", score=3, impact=1)]
+        sent = transport_scores(original)
+        self.assertEqual(sent[0]["score"], 0)
+        self.assertIsNone(original[0]["score"])
+        restore_null_scores(sent, original)
+        self.assertEqual(sent, original)
+
+    def test_common_countries_require_every_configuration(self):
+        runs = {("RU", "a"): {"status": "completed"}, ("RU", "b"): {"status": "completed"},
+                ("IN", "a"): {"status": "no_feasible_solution"}, ("IN", "b"): {"status": "completed"}}
+        self.assertEqual(common_completed_countries(runs, ["RU", "IN"], ["a", "b"]), ["RU"])
+        self.assertEqual(common_completed_countries(runs, ["RU", "IN"], ["b"]), ["RU", "IN"])
+
+    def test_calibration_preserves_all_minimum_sources(self):
+        country = dict(scope="country", country_code="RU", date="2024-01-05")
+        global_ = dict(scope="global", date="2024-02-01", match_mode="exact")
+        a = dict(start="2024-01-01", component_starts=["2024-01-01", "2024-01-05"], impact=.1)
+        b = dict(start="2024-02-01", impact=.1)
+        evidence = calibration_evidence([a, b], [country, global_], "RU", 0, .1)
+        self.assertEqual(evidence["matched_training_anomalies"], 2)
+        self.assertEqual([s["labels"] for s in evidence["threshold_sources"]], [[country], [global_]])
+        empty = calibration_evidence([a], [country], "IN", 3, None)
+        self.assertEqual(empty["threshold_sources"], [])
+        with self.assertRaises(ValueError):
+            calibration_evidence([a], [country], "RU", 0, None)
+
+    def test_low_impact_rows_distinguish_missing_calibration(self):
+        record = dict(country="IN", variant="labels_ensemble", selection="knee", threshold=None,
+                      calibration=dict(matched_training_anomalies=0, threshold_sources=[]),
+                      retained_anomalies=[dict(impact=.9), dict(impact=1)])
+        rows = low_impact_rows([record], ["RU"])
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["in_common_countries"])
+        self.assertEqual(rows[0]["reason"], "no_matched_training_anomaly")
+        record["threshold"] = .5
+        self.assertEqual(low_impact_rows([record], ["IN"])[0]["reason"], "above_calibrated_threshold")
+
     def test_unmatched_export_keeps_group_constituents(self):
         def anomaly(country, day):
             return dict(country=country, start=day, end=day, peak=day, impact=5)

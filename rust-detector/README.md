@@ -769,6 +769,16 @@ constituent coverage. This command does not retune or send notifications.
 five-country grouping. It has one row per constituent anomaly; a shared
 `notification_id` identifies members of the same cross-country notification.
 
+Add `--all-configurations` to compare all four tuned configurations and the fixed
+baseline on countries completed by every configuration. The report shows raw,
+coalesced, impact-retained, and grouped counts, notification matches, and country-label
+retention. `analysis.json` also contains available-country comparisons and the
+training anomalies and labels that set each impact threshold, including the
+retained anomalies with impact below one. `configuration-summary.csv` and
+`contextualization-table.tex` contain the common-country comparison.
+`low-impact-review.csv` traces each retained IF < 1 anomaly in the available-country
+label-constrained ensemble knee/fallback output to its calibration event(s).
+
 ### Run all-country ensemble tuning
 
 `scripts/batch_ensemble_tuning.py` runs the complete constrained workflow for

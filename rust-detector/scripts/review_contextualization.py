@@ -1,4 +1,4 @@
-"""Review contextualization of saved ensemble outputs without retuning."""
+"""Review contextualization of saved temporal detections without retuning."""
 import argparse
 import csv
 import json
@@ -8,6 +8,10 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from batch_ensemble_tuning import label_applies, label_matches, required_labels
+
+VARIANTS = ["original", "labels", "ensemble", "labels_ensemble", "fixed_3sigma"]
+NAMES = {"original": "Single detector", "labels": "Single + labels",
+         "ensemble": "Ensemble", "labels_ensemble": "Ensemble + labels", "fixed_3sigma": "Fixed 3σ"}
 
 
 def read(path):
@@ -20,6 +24,18 @@ def write(path, value):
 
 def starts(anomaly):
     return anomaly.get("component_starts") or [anomaly["start"]]
+
+
+def transport_scores(anomalies):
+    """The frozen CLI requires a numeric score; contextualization never filters on it."""
+    return [dict(a, score=0.0) if a.get("score") is None else a for a in anomalies]
+
+
+def restore_null_scores(anomalies, originals):
+    missing = {(a.get("country"), s) for a in originals if a.get("score") is None for s in starts(a)}
+    for a in anomalies:
+        if any((a.get("country"), s) in missing for s in starts(a)):
+            a["score"] = None
 
 
 def matches(anomaly, label, proximity):
@@ -43,6 +59,22 @@ def evaluation_labels(snapshot, replacement, cutoff):
     if training(snapshot) != training(replacement):
         raise ValueError("evaluation label updates must preserve training labels")
     return replacement
+
+
+def common_completed_countries(runs, countries, variants):
+    return [c for c in countries if all(runs[c, v]["status"] == "completed" for v in variants)]
+
+
+def calibration_evidence(anomalies, labels, country, proximity, threshold):
+    applicable = [l for l in labels if label_applies(l, country)]
+    matched = [dict(anomaly=a, labels=[l for l in applicable if matches(a, l, proximity)])
+               for a in anomalies]
+    matched = [a for a in matched if a["labels"]]
+    expected = min((a["anomaly"]["impact"] for a in matched), default=None)
+    if expected != threshold:
+        raise ValueError(f"calibration disagrees with saved Rust filter for {country}: {expected} != {threshold}")
+    return dict(applicable_training_labels=len(applicable), matched_training_anomalies=len(matched),
+                threshold_sources=[a for a in matched if a["anomaly"]["impact"] == threshold])
 
 
 def notification_matches(grouping, labels_by_country, proximity):
@@ -103,14 +135,18 @@ def write_unmatched_notifications(path, grouping):
 
 def filter_output(binary, country, anomalies, labels_path, proximity, gap, directory):
     source, output = directory / "input.json", directory / "output.json"
-    write(source, {"countries": [country], "anomalies": anomalies})
-    subprocess.run([str(binary), "filter", "--input", str(source), "--labels", str(labels_path),
-                    "--output", str(output), "--proximity-days", str(proximity),
-                    "--coalesce-sparse-gap-days", str(gap)], check=True, capture_output=True, text=True)
+    write(source, {"countries": [country], "anomalies": transport_scores(anomalies)})
+    command = [str(binary), "filter", "--input", str(source), "--labels", str(labels_path),
+               "--output", str(output), "--proximity-days", str(proximity),
+               "--coalesce-sparse-gap-days", str(gap)]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(f"filter failed for {country} ({len(anomalies)} anomalies): {result.stderr.strip()}")
     result = read(output)
     # Recover the complete coalesced set, before the CLI's impact filtering.
     coalesced = sorted(result["anomalies"] + [r["anomaly"] for r in result["discarded"]],
                        key=lambda a: a["start"])
+    restore_null_scores(coalesced, anomalies)
     return coalesced, result["stages"][0].get("impact_threshold")
 
 
@@ -129,6 +165,178 @@ def ordering_cases(anomalies, labels, country, proximity):
     return cases
 
 
+def aggregate_rows(rows, binary, labels_by_country, proximity, scratch):
+    candidates = [dict(country=r["country"], **a) for r in rows for a in r["retained_anomalies"]]
+    source = scratch / "candidates.json"
+    write(source, transport_scores(candidates))
+    grouping = {}
+    for minimum in [4, 5]:
+        destination = scratch / "grouped.json"
+        subprocess.run([str(binary), "group-cross-country", "--input", str(source),
+                        "--output", str(destination), "--minimum-countries", str(minimum)],
+                       check=True, capture_output=True, text=True)
+        grouping[str(minimum)] = read(destination)
+        restore_null_scores(grouping[str(minimum)]["individual_notifications"], candidates)
+        for group in grouping[str(minimum)]["grouped_notifications"]:
+            restore_null_scores(group["anomalies"], candidates)
+        grouping[str(minimum)]["label_matching"] = notification_matches(
+            grouping[str(minimum)], labels_by_country, proximity)
+    summary = {key: sum(r[key] for r in rows) for key in
+               ["raw", "raw_sparse", "coalesced", "retained", "labels_total",
+                "raw_covered", "retained_covered"]}
+    summary.update(countries=len(rows), variant=rows[0]["variant"] if rows else None,
+                   selection=rows[0]["selection"] if rows else None,
+                   low_impact_retained=sum(a["impact"] < 1 for a in candidates),
+                   without_calibration=[r["country"] for r in rows if r["threshold"] is None])
+    summary["notifications"] = {
+        minimum: g["individual_notification_count"] + g["grouped_notification_count"]
+        for minimum, g in grouping.items()}
+    summary["notification_matching"] = {
+        minimum: {k: v for k, v in g["label_matching"].items() if k not in ("individuals", "groups")}
+        for minimum, g in grouping.items()}
+    return summary, grouping
+
+
+def low_impact_rows(countries, common):
+    rows = []
+    for record in countries:
+        for anomaly in record["retained_anomalies"]:
+            if anomaly["impact"] >= 1:
+                continue
+            rows.append(dict(
+                variant=record["variant"], selection=record["selection"], country=record["country"],
+                in_common_countries=record["country"] in common, anomaly=anomaly,
+                threshold=record["threshold"],
+                reason="no_matched_training_anomaly" if record["threshold"] is None else "above_calibrated_threshold",
+                matched_training_anomalies=record["calibration"]["matched_training_anomalies"],
+                threshold_sources=record["calibration"]["threshold_sources"]))
+    return rows
+
+
+def write_low_impact_review(path, analysis):
+    key = "labels_ensemble/knee" if analysis["all_configurations"] else "knee"
+    matching = analysis["available_grouping"][key]["5"]["label_matching"]
+    annotations = matching["individuals"] + [a for g in matching["groups"] for a in g["members"]]
+    labels = {(a["country"], a["start"]): a["labels"] for a in annotations}
+    fields = ["country", "start", "end", "impact", "sparse", "impact_threshold", "reason",
+              "training_anomaly_starts", "calibration_label_dates", "calibration_events",
+              "calibration_scopes", "test_label_matches"]
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for r in analysis["low_impact_retained"]:
+            if r["variant"] != "labels_ensemble" or r["selection"] != "knee":
+                continue
+            a = r["anomaly"]
+            sources = r["threshold_sources"]
+            events = [l for source in sources for l in source["labels"]]
+            writer.writerow(dict(country=r["country"], start=a["start"], end=a["end"],
+                impact=a["impact"], sparse=a.get("sparse", False), impact_threshold=r["threshold"],
+                reason=r["reason"], training_anomaly_starts="; ".join(s["anomaly"]["start"] for s in sources),
+                calibration_label_dates="; ".join(l["date"] for l in events),
+                calibration_events="; ".join(l.get("title") or l.get("description", "") for l in events),
+                calibration_scopes="; ".join(l["scope"] for l in events),
+                test_label_matches="; ".join(f"{l['date']} {l.get('description', '')}"
+                                             for l in labels[r["country"], a["start"]])))
+
+
+def write_paper_table(path, summary):
+    lines = [r"\begin{table}[t]", r"\centering\small",
+             r"\caption{Contextualization on the common-country cohort. Raw counts anomalies before contextualization; alerts counts final notifications. Matched counts notifications with at least one country/global label match. Labels reports retained country-label coverage. K: knee/fallback; L: leftmost.}",
+             r"\label{tab:contextualization}", r"\resizebox{\columnwidth}{!}{%",
+             r"\begin{tabular}{llrrrr}", r"\toprule",
+             r"Configuration & Rule & Raw & Alerts & Matched & Labels \\", r"\midrule"]
+    for s in summary.values():
+        m = s["notification_matching"]["5"]
+        name = NAMES[s["variant"]].replace("Fixed 3σ", r"Fixed $3\sigma$")
+        rule = {"knee": "K", "leftmost": "L", "fixed": "--"}[s["selection"]]
+        lines.append(f"{name} & {rule} & {s['raw']} & {m['total']} & {m['matched']} & "
+                     f"{s['retained_covered']}/{s['labels_total']} " + r"\\")
+    lines += [r"\bottomrule", r"\end{tabular}%", "}", r"\end{table}"]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def write_configuration_summary(path, summary):
+    fields = ["configuration", "selection", "countries", "raw_anomalies", "coalesced_anomalies",
+              "impact_retained", "notifications", "matched_notifications", "unmatched_notifications",
+              "country_labels_before", "country_labels_after", "country_labels_total", "retained_impact_below_one"]
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for s in summary.values():
+            m = s["notification_matching"]["5"]
+            writer.writerow(dict(configuration=s["variant"], selection=s["selection"], countries=s["countries"],
+                raw_anomalies=s["raw"], coalesced_anomalies=s["coalesced"], impact_retained=s["retained"],
+                notifications=m["total"], matched_notifications=m["matched"],
+                unmatched_notifications=m["total"] - m["matched"], country_labels_before=s["raw_covered"],
+                country_labels_after=s["retained_covered"], country_labels_total=s["labels_total"],
+                retained_impact_below_one=s["low_impact_retained"]))
+
+
+def report_lines(analysis):
+    mode = "Common completed countries" if analysis["all_configurations"] else "All completed ensemble countries"
+    lines = ["# Contextualization of held-out detections", "",
+             f"{mode}. Impact thresholds use coalesced training anomalies matched to training labels. "
+             "Training intervals crossing the cutoff are excluded from calibration. "
+             "Thresholds remain fixed during testing; countries without a calibration match retain all candidates. "
+             f"Sparse coalescing allows {analysis['sparse_gap_days']} intervening normal day(s). "
+             "Cross-country grouping uses exact start dates and preserves each constituent anomaly.", "",
+             "| Configuration | Rule | Countries | Raw | Coalesced | Impact retained | Alerts (≥5 countries) | Matched alerts | Country labels before → after | IF < 1 retained |",
+             "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |"]
+    for s in analysis["summary"].values():
+        m = s["notification_matching"]["5"]
+        lines.append(f"| {NAMES[s['variant']]} | {s['selection']} | {s['countries']} | {s['raw']} | "
+                     f"{s['coalesced']} | {s['retained']} | {m['total']} | {m['matched']} | "
+                     f"{s['raw_covered']}/{s['labels_total']} → {s['retained_covered']}/{s['labels_total']} | "
+                     f"{s['low_impact_retained']} |")
+    lines += ["", "A notification is matched if any constituent matches a country or global label. "
+              "The JSON also reports groups with every constituent matched and grouping at four countries.", "",
+              "## Low-impact retained anomalies", "",
+              "The following countries have retained IF < 1 anomalies under label-constrained ensemble "
+              "knee/fallback selection, including all available countries.", "",
+              "| Country | Retained IF < 1 | Threshold | Training anomaly and matched event(s) setting the threshold |",
+              "| --- | ---: | ---: | --- |"]
+    for r in analysis["countries"]:
+        if r["variant"] != "labels_ensemble" or r["selection"] != "knee":
+            continue
+        count = sum(a["impact"] < 1 for a in r["retained_anomalies"])
+        if not count:
+            continue
+        threshold = "none" if r["threshold"] is None else f"{r['threshold']:.9g}"
+        evidence = "; ".join(
+            f"{item['anomaly']['start']} (IF {item['anomaly']['impact']:.9g}): " +
+            ", ".join(f"{l['date']} [{l['scope']}] {l.get('description', '')}"
+                      for l in item["labels"])
+            for item in r["calibration"]["threshold_sources"])
+        lines.append(f"| {r['country']} | {count} | {threshold} | {evidence or 'No training anomaly matched a label'} |")
+    lines += ["", "## Country labels removed by impact filtering", ""]
+    for r in analysis["countries"]:
+        if r["country"] not in analysis["comparison_countries"]:
+            continue
+        for l in r["lost_labels"]:
+            lines.append(f"- {r['variant']}/{r['selection']}: {r['country']} {l['date']} — {l.get('description', '')}")
+    lines += ["", "## Available-country ensemble result", ""]
+    key = "labels_ensemble/knee" if analysis["all_configurations"] else "knee"
+    s = analysis["available_summary"][key]
+    m = s["notification_matching"]["5"]
+    lines.append(f"Across {s['countries']} available countries: {s['raw']} raw anomalies, "
+                 f"{s['coalesced']} coalesced, {s['retained']} impact-retained, "
+                 f"{m['total']} notifications, {m['matched']} label-matched. "
+                 f"Country-label coverage: {s['raw_covered']}/{s['labels_total']} to "
+                 f"{s['retained_covered']}/{s['labels_total']}.")
+    lines += ["", "## Country/global attribution conflicts", ""]
+    for case in analysis["ordering_cases"]:
+        lines.append(f"- {case['variant']}: {case['country']} {case['start']}: " + "; ".join(
+            f"{kind}: {item['label']['date']} {item['label'].get('description', '')} ({item['distance']} days)"
+            for kind in ["country_labels", "global_labels"] for item in case[kind]))
+    lines += ["", "analysis.json includes the configuration comparisons, per-country calibration evidence, "
+              "low-impact retained anomalies, lost labels, and notification groups. "
+              "unmatched-notifications.csv uses all available label-constrained ensemble countries with "
+              "knee/fallback selection and five-country grouping. Rows sharing a notification_id belong "
+              "to one cross-country notification."]
+    return lines
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", type=Path, required=True)
@@ -136,6 +344,8 @@ def main():
     parser.add_argument("--sparse-gap-days", type=int, default=1)
     parser.add_argument("--evaluation-labels", type=Path,
                         help="updated labels for test-period attribution; training labels must be unchanged")
+    parser.add_argument("--all-configurations", action="store_true",
+                        help="compare all four tuned configurations and the fixed baseline on common countries")
     args = parser.parse_args()
     if args.sparse_gap_days < 0:
         parser.error("sparse gap must be non-negative")
@@ -150,141 +360,101 @@ def main():
     labels = read(root / "inputs/labels.json")
     if args.evaluation_labels:
         labels = evaluation_labels(labels, read(args.evaluation_labels), cutoff)
-    training_labels = root / "inputs/training-labels.json"
-    if any(label["date"] > cutoff for label in read(training_labels)):
+    training_path = root / "inputs/training-labels.json"
+    training_labels = read(training_path)
+    if any(label["date"] > cutoff for label in training_labels):
         raise ValueError("training-label snapshot contains post-cutoff labels")
     test_labels = [l for l in labels if first <= l["date"] <= end]
     binary = root / "inputs/cenalert-detector"
     args.output.mkdir(parents=True, exist_ok=True)
+    variants = VARIANTS if args.all_configurations else ["labels_ensemble"]
+    runs = {(c, v): read(root / f"runs/{seed}/{c}/{v}/result.json")
+            for c in config["countries"] for v in variants}
+    common = common_completed_countries(runs, config["countries"], variants)
+    if not common:
+        raise ValueError("no countries completed every requested configuration")
     countries, excluded, ordering = [], [], []
     labels_by_country = {}
-    candidates = {s: [] for s in ["knee", "leftmost"]}
+    summary, grouping, available_summary, available_grouping = {}, {}, {}, {}
+
+    def key(variant, selection):
+        return f"{variant}/{selection}" if args.all_configurations else selection
+
     with tempfile.TemporaryDirectory() as temporary:
         scratch = Path(temporary)
-        for country in config["countries"]:
-            directory = root / f"runs/{seed}/{country}/labels_ensemble"
-            result = read(directory / "result.json")
-            if result["status"] != "completed":
-                excluded.append(dict(country=country, status=result["status"]))
-                continue
-            period_labels = [l for l in test_labels
-                             if result["test_first_date"] <= l["date"] <= result["test_last_date"]]
-            labels_by_country[country] = period_labels
-            required = required_labels(period_labels, country, result["test_first_date"],
-                                       result["test_last_date"], 0)
-            for selection in candidates:
-                detection = read(directory / f"{selection}-detection.json")
-                all_anomalies = detection["anomalies"]
-                training = [a for a in all_anomalies if a["end"] <= cutoff]
-                raw = [a for a in all_anomalies if first <= a["start"] <= end]
-                _, threshold = filter_output(binary, country, training, training_labels,
-                                             proximity, args.sparse_gap_days, scratch)
-                coalesced, _ = filter_output(binary, country, raw, training_labels,
-                                             proximity, args.sparse_gap_days, scratch)
-                retained = retain_by_impact(coalesced, threshold)
-                raw_covered = coverage(raw, required, proximity)
-                recorded = next(s for s in result["selections"] if s["selection"] == selection)
-                assert len(raw) == recorded["anomaly_count"]
-                if not args.evaluation_labels:
-                    assert (len(required), len(raw_covered)) == (
-                        recorded["country_labels_total"], recorded["country_labels_covered"])
-                retained_covered = coverage(retained, required, proximity)
-                covered_coalesced = coverage(coalesced, required, proximity)
-                assert covered_coalesced == raw_covered
-                countries.append(dict(country=country, selection=selection,
-                    threshold=threshold, training_anomalies=len(training),
-                    raw=len(raw), raw_sparse=sum(a.get("sparse", False) for a in raw),
-                    coalesced=len(coalesced), retained=len(retained),
-                    labels_total=len(required), raw_covered=len(raw_covered),
-                    retained_covered=len(retained_covered),
-                    lost_labels=[l for l in raw_covered if l not in retained_covered],
-                    excluded_boundary_intervals=[a for a in all_anomalies if a["start"] <= cutoff < a["end"]],
-                    parameters=detection["parameters"], raw_anomalies=raw,
-                    coalesced_anomalies=coalesced, retained_anomalies=retained))
-                candidates[selection].extend(dict(country=country, **a) for a in retained)
-                if selection == "knee":
-                    ordering.extend(ordering_cases(raw, period_labels, country, proximity))
-        grouping = {}
-        for selection, anomalies in candidates.items():
-            source = scratch / "candidates.json"
-            write(source, anomalies)
-            grouping[selection] = {}
-            for minimum in [4, 5]:
-                destination = scratch / "grouped.json"
-                subprocess.run([str(binary), "group-cross-country", "--input", str(source),
-                                "--output", str(destination), "--minimum-countries", str(minimum)],
-                               check=True, capture_output=True, text=True)
-                grouping[selection][str(minimum)] = read(destination)
-    summary = {}
-    for selection in candidates:
-        rows = [r for r in countries if r["selection"] == selection]
-        summary[selection] = {key: sum(r[key] for r in rows) for key in
-                              ["raw", "raw_sparse", "coalesced", "retained", "labels_total",
-                               "raw_covered", "retained_covered"]}
-        summary[selection]["countries"] = len(rows)
-        summary[selection]["without_calibration"] = [r["country"] for r in rows if r["threshold"] is None]
-        summary[selection]["notifications"] = {
-            minimum: g["individual_notification_count"] + g["grouped_notification_count"]
-            for minimum, g in grouping[selection].items()}
-        summary[selection]["notification_matching"] = {}
-        for minimum, g in grouping[selection].items():
-            detail = notification_matches(g, labels_by_country, proximity)
-            g["label_matching"] = detail
-            summary[selection]["notification_matching"][minimum] = {
-                k: v for k, v in detail.items() if k not in ("individuals", "groups")}
+        for variant in variants:
+            for country in config["countries"]:
+                directory = root / f"runs/{seed}/{country}/{variant}"
+                result = runs[country, variant]
+                if result["status"] != "completed":
+                    excluded.append(dict(country=country, variant=variant, status=result["status"]))
+                    continue
+                period_labels = [l for l in test_labels
+                                 if result["test_first_date"] <= l["date"] <= result["test_last_date"]]
+                if country in labels_by_country:
+                    assert labels_by_country[country] == period_labels
+                labels_by_country[country] = period_labels
+                required = required_labels(period_labels, country, result["test_first_date"],
+                                           result["test_last_date"], 0)
+                for selection in (["fixed"] if variant == "fixed_3sigma" else ["knee", "leftmost"]):
+                    detection = read(directory / f"{selection}-detection.json")
+                    all_anomalies = detection["anomalies"]
+                    training = [a for a in all_anomalies if a["end"] <= cutoff]
+                    raw = [a for a in all_anomalies if first <= a["start"] <= end]
+                    calibrated, threshold = filter_output(binary, country, training, training_path,
+                                                         proximity, args.sparse_gap_days, scratch)
+                    evidence = calibration_evidence(calibrated, training_labels, country, proximity, threshold)
+                    coalesced, _ = filter_output(binary, country, raw, training_path,
+                                                 proximity, args.sparse_gap_days, scratch)
+                    retained = retain_by_impact(coalesced, threshold)
+                    raw_covered = coverage(raw, required, proximity)
+                    recorded = next(s for s in result["selections"] if s["selection"] == selection)
+                    assert len(raw) == recorded["anomaly_count"]
+                    if not args.evaluation_labels:
+                        assert (len(required), len(raw_covered)) == (
+                            recorded["country_labels_total"], recorded["country_labels_covered"])
+                    retained_covered = coverage(retained, required, proximity)
+                    assert coverage(coalesced, required, proximity) == raw_covered
+                    countries.append(dict(country=country, variant=variant, selection=selection,
+                        threshold=threshold, calibration=evidence, training_anomalies=len(training),
+                        raw=len(raw), raw_sparse=sum(a.get("sparse", False) for a in raw),
+                        coalesced=len(coalesced), retained=len(retained),
+                        labels_total=len(required), raw_covered=len(raw_covered),
+                        retained_covered=len(retained_covered),
+                        lost_labels=[l for l in raw_covered if l not in retained_covered],
+                        excluded_boundary_intervals=[a for a in all_anomalies if a["start"] <= cutoff < a["end"]],
+                        parameters=detection.get("parameters"), raw_anomalies=raw,
+                        coalesced_anomalies=coalesced, retained_anomalies=retained))
+                    if selection in ("knee", "fixed"):
+                        ordering.extend(dict(variant=variant, **case)
+                                        for case in ordering_cases(raw, period_labels, country, proximity))
+            print(f"Reviewed {variant}", flush=True)
+            for selection in (["fixed"] if variant == "fixed_3sigma" else ["knee", "leftmost"]):
+                rows = [r for r in countries if r["variant"] == variant and r["selection"] == selection]
+                name = key(variant, selection)
+                available_summary[name], available_grouping[name] = aggregate_rows(
+                    rows, binary, labels_by_country, proximity, scratch)
+                selected = [r for r in rows if r["country"] in common]
+                if len(selected) == len(rows):
+                    summary[name], grouping[name] = available_summary[name], available_grouping[name]
+                else:
+                    summary[name], grouping[name] = aggregate_rows(
+                        selected, binary, labels_by_country, proximity, scratch)
     analysis = dict(source=str(root), train_end=cutoff, test_end=end, seed=seed,
                     sparse_gap_days=args.sparse_gap_days, threshold_reference="training",
-                    summary=summary, excluded=excluded, countries=countries,
-                    ordering_cases=ordering, grouping=grouping)
-    analysis["evaluation_labels"] = labels
+                    all_configurations=args.all_configurations, comparison_countries=common,
+                    summary=summary, available_summary=available_summary, excluded=excluded,
+                    countries=countries, ordering_cases=ordering, grouping=grouping,
+                    available_grouping=available_grouping, evaluation_labels=labels,
+                    low_impact_retained=low_impact_rows(countries, common))
     write(args.output / "analysis.json", analysis)
-    write_unmatched_notifications(args.output / "unmatched-notifications.csv", grouping["knee"]["5"])
-    lines = ["# Contextualization of held-out ensemble detections", "",
-             "All completed label-constrained ensemble countries are included. Impact thresholds use only "
-             "label-matched, coalesced training anomalies. Training intervals crossing the cutoff are excluded "
-             "from calibration. Test labels are used for evaluation and attribution. A country with no "
-             "matched training anomaly retains all coalesced candidates. "
-             f"Sparse gaps allow {args.sparse_gap_days} intervening normal day(s). "
-             "Grouping uses exact anomaly start dates and preserves constituent anomalies.", "",
-             "| Selection | Countries | Raw | Coalesced | Impact retained | Alerts (4 countries) | Alerts (5 countries) | Country-label coverage |",
-             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
-    for selection, s in summary.items():
-        lines.append(f"| {selection} | {s['countries']} | {s['raw']} | {s['coalesced']} | {s['retained']} | "
-                     f"{s['notifications']['4']} | {s['notifications']['5']} | "
-                     f"{s['raw_covered']}/{s['labels_total']} to {s['retained_covered']}/{s['labels_total']} |")
-    lines += ["", "## Notification label matching", "",
-              "A grouped notification counts as matched when at least one constituent matches a country "
-              "or global label. Full constituent coverage is reported separately.", ""]
-    for selection, s in summary.items():
-        for minimum, m in s["notification_matching"].items():
-            lines.append(f"- {selection}, grouping at {minimum} countries: {m['matched']}/{m['total']} "
-                         f"notifications matched ({m['individual_matched']} individual, "
-                         f"{m['groups_any_matched']} grouped; "
-                         f"{m['groups_all_members_matched']} groups have every constituent matched).")
-    lines += ["", "## Labels removed by impact filtering", ""]
-    for r in countries:
-        for l in r["lost_labels"]:
-            lines.append(f"- {r['selection']}: {r['country']} {l['date']} — {l.get('description', '')}")
-    lines += ["", "## Suriname", ""]
-    for r in countries:
-        if r["country"] == "SR":
-            lines.append(f"- {r['selection']}: {r['raw']} raw ({r['raw_sparse']} sparse), "
-                         f"{r['coalesced']} coalesced, {r['retained']} impact-retained. "
-                         f"Training-calibrated threshold: {r['threshold']}. "
-                         f"Training anomaly count: {r['training_anomalies']}. "
-                         f"Residual ratio: {r['parameters']['min_residual_ratio']}. "
-                         f"Maximum coalesced test impact: {max((a['impact'] for a in r['coalesced_anomalies']), default=0)}.")
-    lines += ["", "## Country/global attribution conflicts", ""]
-    for case in ordering:
-        lines.append(f"- {case['country']} {case['start']}: " + "; ".join(
-            f"{kind}: {item['label']['date']} {item['label'].get('description', '')} ({item['distance']} days)"
-            for kind in ["country_labels", "global_labels"] for item in case[kind]))
-    lines += ["", "unmatched-notifications.csv lists unmatched knee/fallback notifications with grouping "
-              "at five countries. Each row is a constituent anomaly; rows sharing a notification_id "
-              "belong to one cross-country notification.", "",
-              "Per-country thresholds, retained/discarded-by-comparison anomalies, lost labels, and "
-              "all notification groups are recorded in analysis.json."]
-    (args.output / "report.md").write_text("\n".join(lines) + "\n")
+    write_unmatched_notifications(args.output / "unmatched-notifications.csv",
+                                  available_grouping[key("labels_ensemble", "knee")]["5"])
+    write_low_impact_review(args.output / "low-impact-review.csv", analysis)
+    if args.all_configurations:
+        write_paper_table(args.output / "contextualization-table.tex", summary)
+        write_configuration_summary(args.output / "configuration-summary.csv", summary)
+    (args.output / "report.md").write_text("\n".join(report_lines(analysis)) + "\n")
     print(json.dumps(summary, indent=2))
 
 
