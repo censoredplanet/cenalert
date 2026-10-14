@@ -36,6 +36,34 @@ def retain_by_impact(anomalies, threshold):
     return [a for a in anomalies if a["impact"] >= threshold]
 
 
+def evaluation_labels(snapshot, replacement, cutoff):
+    def training(items):
+        return sorted(json.dumps(l, sort_keys=True) for l in items if l["date"] <= cutoff)
+    if training(snapshot) != training(replacement):
+        raise ValueError("evaluation label updates must preserve training labels")
+    return replacement
+
+
+def notification_matches(grouping, labels_by_country, proximity):
+    def annotate(anomaly):
+        labels = labels_by_country[anomaly["country"]]
+        return dict(country=anomaly["country"], start=anomaly["start"],
+                    labels=[l for l in labels if l["scope"] in ("country", "global")
+                            and label_applies(l, anomaly["country"])
+                            and matches(anomaly, l, proximity)])
+    individuals = [annotate(a) for a in grouping["individual_notifications"]]
+    groups = [dict(date=g["date"], members=[annotate(a) for a in g["anomalies"]])
+              for g in grouping["grouped_notifications"]]
+    individual_matched = sum(bool(a["labels"]) for a in individuals)
+    group_any = sum(any(a["labels"] for a in g["members"]) for g in groups)
+    group_all = sum(all(a["labels"] for a in g["members"]) for g in groups)
+    return dict(total=len(individuals) + len(groups),
+                matched=individual_matched + group_any,
+                individual_matched=individual_matched, groups_any_matched=group_any,
+                groups_all_members_matched=group_all,
+                individuals=individuals, groups=groups)
+
+
 def filter_output(binary, country, anomalies, labels_path, proximity, gap, directory):
     source, output = directory / "input.json", directory / "output.json"
     write(source, {"countries": [country], "anomalies": anomalies})
@@ -69,6 +97,8 @@ def main():
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sparse-gap-days", type=int, default=1)
+    parser.add_argument("--evaluation-labels", type=Path,
+                        help="updated labels for test-period attribution; training labels must be unchanged")
     args = parser.parse_args()
     if args.sparse_gap_days < 0:
         parser.error("sparse gap must be non-negative")
@@ -81,6 +111,8 @@ def main():
     first = str(date.fromisoformat(cutoff) + timedelta(days=1))
     proximity = config["proximity_days"]
     labels = read(root / "inputs/labels.json")
+    if args.evaluation_labels:
+        labels = evaluation_labels(labels, read(args.evaluation_labels), cutoff)
     training_labels = root / "inputs/training-labels.json"
     if any(label["date"] > cutoff for label in read(training_labels)):
         raise ValueError("training-label snapshot contains post-cutoff labels")
@@ -88,6 +120,7 @@ def main():
     binary = root / "inputs/cenalert-detector"
     args.output.mkdir(parents=True, exist_ok=True)
     countries, excluded, ordering = [], [], []
+    labels_by_country = {}
     candidates = {s: [] for s in ["knee", "leftmost"]}
     with tempfile.TemporaryDirectory() as temporary:
         scratch = Path(temporary)
@@ -99,6 +132,7 @@ def main():
                 continue
             period_labels = [l for l in test_labels
                              if result["test_first_date"] <= l["date"] <= result["test_last_date"]]
+            labels_by_country[country] = period_labels
             required = required_labels(period_labels, country, result["test_first_date"],
                                        result["test_last_date"], 0)
             for selection in candidates:
@@ -113,9 +147,10 @@ def main():
                 retained = retain_by_impact(coalesced, threshold)
                 raw_covered = coverage(raw, required, proximity)
                 recorded = next(s for s in result["selections"] if s["selection"] == selection)
-                assert (len(raw), len(required), len(raw_covered)) == (
-                    recorded["anomaly_count"], recorded["country_labels_total"],
-                    recorded["country_labels_covered"])
+                assert len(raw) == recorded["anomaly_count"]
+                if not args.evaluation_labels:
+                    assert (len(required), len(raw_covered)) == (
+                        recorded["country_labels_total"], recorded["country_labels_covered"])
                 retained_covered = coverage(retained, required, proximity)
                 covered_coalesced = coverage(coalesced, required, proximity)
                 assert covered_coalesced == raw_covered
@@ -154,10 +189,17 @@ def main():
         summary[selection]["notifications"] = {
             minimum: g["individual_notification_count"] + g["grouped_notification_count"]
             for minimum, g in grouping[selection].items()}
+        summary[selection]["notification_matching"] = {}
+        for minimum, g in grouping[selection].items():
+            detail = notification_matches(g, labels_by_country, proximity)
+            g["label_matching"] = detail
+            summary[selection]["notification_matching"][minimum] = {
+                k: v for k, v in detail.items() if k not in ("individuals", "groups")}
     analysis = dict(source=str(root), train_end=cutoff, test_end=end, seed=seed,
                     sparse_gap_days=args.sparse_gap_days, threshold_reference="training",
                     summary=summary, excluded=excluded, countries=countries,
                     ordering_cases=ordering, grouping=grouping)
+    analysis["evaluation_labels"] = labels
     write(args.output / "analysis.json", analysis)
     lines = ["# Contextualization of held-out ensemble detections", "",
              "All completed label-constrained ensemble countries are included. Impact thresholds use only "
@@ -172,6 +214,15 @@ def main():
         lines.append(f"| {selection} | {s['countries']} | {s['raw']} | {s['coalesced']} | {s['retained']} | "
                      f"{s['notifications']['4']} | {s['notifications']['5']} | "
                      f"{s['raw_covered']}/{s['labels_total']} to {s['retained_covered']}/{s['labels_total']} |")
+    lines += ["", "## Notification label matching", "",
+              "A grouped notification counts as matched when at least one constituent matches a country "
+              "or global label. Full constituent coverage is reported separately.", ""]
+    for selection, s in summary.items():
+        for minimum, m in s["notification_matching"].items():
+            lines.append(f"- {selection}, grouping at {minimum} countries: {m['matched']}/{m['total']} "
+                         f"notifications matched ({m['individual_matched']} individual, "
+                         f"{m['groups_any_matched']} grouped; "
+                         f"{m['groups_all_members_matched']} groups have every constituent matched).")
     lines += ["", "## Labels removed by impact filtering", ""]
     for r in countries:
         for l in r["lost_labels"]:

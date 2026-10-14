@@ -759,7 +759,10 @@ match retain all candidates. Intervals crossing the training cutoff are
 excluded from calibration. `--sparse-gap-days` defaults to one.
 The report compares grouping at four and five countries; `analysis.json`
 contains per-country stages, lost test labels, attribution conflicts, and
-notification groups. This command does not retune or send notifications.
+notification groups with country/global label matches. To evaluate updated
+test labels, pass `--evaluation-labels /path/to/labels.json`; training labels
+must remain unchanged. Grouped notifications report both partial and complete
+constituent coverage. This command does not retune or send notifications.
 
 ### Run all-country ensemble tuning
 
