@@ -740,7 +740,9 @@ The output contains `results.tex`, English and Chinese summaries, an evaluation
 matrix, member-vote and Pareto-front figures, an all-country Pareto PDF, and an
 unlabeled ensemble-only review CSV. Tables use countries completed by all five
 configurations. Training coverage is computed from the saved detection outputs
-and label snapshot. Upload the figure PDFs to `figures/` in the manuscript.
+and label snapshot. Pass `--evaluation-labels /path/to/labels.json` to recompute
+test coverage and attribution with updated labels. Training labels must remain
+unchanged. Upload the figure PDFs to `figures/` in the manuscript.
 
 ### Review held-out notification candidates
 
@@ -763,6 +765,9 @@ notification groups with country/global label matches. To evaluate updated
 test labels, pass `--evaluation-labels /path/to/labels.json`; training labels
 must remain unchanged. Grouped notifications report both partial and complete
 constituent coverage. This command does not retune or send notifications.
+`unmatched-notifications.csv` lists unmatched knee/fallback notifications using
+five-country grouping. It has one row per constituent anomaly; a shared
+`notification_id` identifies members of the same cross-country notification.
 
 ### Run all-country ensemble tuning
 

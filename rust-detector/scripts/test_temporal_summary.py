@@ -4,10 +4,28 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from summarize_temporal_results import selected_point, write_reports
+from summarize_temporal_results import reevaluate_test_selections, selected_point, write_reports
+from run_experiment_matrix import evaluate_period
 
 
 class TemporalSummaryTests(unittest.TestCase):
+    def test_new_labels_update_coverage_without_changing_saved_results(self):
+        anomaly = dict(start="2026-06-17", impact=5, label_match=None)
+        saved = dict(anomaly_count=1, country_labels_total=0, country_labels_covered=0,
+                     unmatched_anomalies=1, anomalies=[anomaly], selection="knee", knee_found=True)
+        key = ("IN", 42, "ensemble", "knee")
+        runs = {key[:3]: dict(test_first_date="2025-01-01", test_last_date="2026-08-31")}
+        labels = [dict(date="2026-06-16", scope="country", country_code="IN"),
+                  dict(date="2026-09-01", scope="country", country_code="IN")]
+        updated = reevaluate_test_selections({key: saved}, runs, labels, 3, evaluate_period)[key]
+        self.assertEqual(updated["anomaly_count"], 1)
+        self.assertEqual(updated["country_labels_total"], 1)
+        self.assertEqual(updated["country_labels_covered"], 1)
+        self.assertEqual(updated["unmatched_anomalies"], 0)
+        self.assertEqual(saved["country_labels_total"], 0)
+        self.assertIsNone(anomaly["label_match"])
+        self.assertTrue(updated["knee_found"])
+
     def test_selected_point_uses_saved_parameters_and_rounded_window(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -1,5 +1,6 @@
 """Review contextualization of saved ensemble outputs without retuning."""
 import argparse
+import csv
 import json
 import subprocess
 import tempfile
@@ -62,6 +63,42 @@ def notification_matches(grouping, labels_by_country, proximity):
                 individual_matched=individual_matched, groups_any_matched=group_any,
                 groups_all_members_matched=group_all,
                 individuals=individuals, groups=groups)
+
+
+def unmatched_notification_rows(grouping):
+    """Keep each constituent interval, sharing an ID for a grouped notification."""
+    matching = grouping["label_matching"]
+    rows = []
+
+    def append(identifier, kind, when, countries, anomalies):
+        for a in anomalies:
+            rows.append(dict(notification_id=identifier, notification_type=kind,
+                notification_date=when, countries=";".join(countries),
+                country=a["country"], start=a["start"], end=a["end"], peak=a["peak"],
+                peak_value=a.get("peak_value"), impact=a["impact"],
+                sparse=a.get("sparse", False), component_starts=";".join(starts(a))))
+
+    for anomaly, annotated in zip(grouping["individual_notifications"], matching["individuals"], strict=True):
+        if not annotated["labels"]:
+            append(f"{anomaly['country']}-{anomaly['start']}", "individual", anomaly["start"],
+                   [anomaly["country"]], [anomaly])
+    for group, annotated in zip(grouping["grouped_notifications"], matching["groups"], strict=True):
+        if not any(member["labels"] for member in annotated["members"]):
+            append(f"group-{group['date']}", "cross_country", group["date"],
+                   group["countries"], group["anomalies"])
+    return sorted(rows, key=lambda r: (r["notification_date"], r["notification_id"], r["country"]))
+
+
+def write_unmatched_notifications(path, grouping):
+    fields = ["notification_id", "notification_type", "notification_date", "countries",
+              "country", "start", "end", "peak", "peak_value", "impact", "sparse", "component_starts"]
+    rows = unmatched_notification_rows(grouping)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    assert len({r["notification_id"] for r in rows}) == (
+        grouping["label_matching"]["total"] - grouping["label_matching"]["matched"])
 
 
 def filter_output(binary, country, anomalies, labels_path, proximity, gap, directory):
@@ -201,6 +238,7 @@ def main():
                     ordering_cases=ordering, grouping=grouping)
     analysis["evaluation_labels"] = labels
     write(args.output / "analysis.json", analysis)
+    write_unmatched_notifications(args.output / "unmatched-notifications.csv", grouping["knee"]["5"])
     lines = ["# Contextualization of held-out ensemble detections", "",
              "All completed label-constrained ensemble countries are included. Impact thresholds use only "
              "label-matched, coalesced training anomalies. Training intervals crossing the cutoff are excluded "
@@ -241,7 +279,10 @@ def main():
         lines.append(f"- {case['country']} {case['start']}: " + "; ".join(
             f"{kind}: {item['label']['date']} {item['label'].get('description', '')} ({item['distance']} days)"
             for kind in ["country_labels", "global_labels"] for item in case[kind]))
-    lines += ["", "Per-country thresholds, retained/discarded-by-comparison anomalies, lost labels, and "
+    lines += ["", "unmatched-notifications.csv lists unmatched knee/fallback notifications with grouping "
+              "at five countries. Each row is a constituent anomaly; rows sharing a notification_id "
+              "belong to one cross-country notification.", "",
+              "Per-country thresholds, retained/discarded-by-comparison anomalies, lost labels, and "
               "all notification groups are recorded in analysis.json."]
     (args.output / "report.md").write_text("\n".join(lines) + "\n")
     print(json.dumps(summary, indent=2))

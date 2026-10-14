@@ -1,12 +1,37 @@
 """Tests for held-out contextualization analysis."""
 import unittest
+import csv
+import tempfile
+from pathlib import Path
 
 from review_contextualization import (
     coverage, evaluation_labels, notification_matches, ordering_cases, retain_by_impact,
+    unmatched_notification_rows, write_unmatched_notifications,
 )
 
 
 class ContextualizationReviewTests(unittest.TestCase):
+    def test_unmatched_export_keeps_group_constituents(self):
+        def anomaly(country, day):
+            return dict(country=country, start=day, end=day, peak=day, impact=5)
+        a = anomaly("RU", "2026-01-01")
+        b = anomaly("TR", "2026-01-01")
+        c = anomaly("IN", "2026-02-01")
+        group = dict(date=a["start"], countries=["RU", "TR"], anomalies=[a, b])
+        grouping = dict(individual_notifications=[c], grouped_notifications=[group])
+        grouping["label_matching"] = notification_matches(grouping, {c: [] for c in ["RU", "TR", "IN"]}, 3)
+        rows = unmatched_notification_rows(grouping)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(len({r["notification_id"] for r in rows}), 2)
+        self.assertEqual([r["country"] for r in rows[:2]], ["RU", "TR"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "unmatched.csv"
+            write_unmatched_notifications(path, grouping)
+            with path.open() as stream:
+                self.assertEqual(len(list(csv.DictReader(stream))), 3)
+        grouping["label_matching"]["groups"][0]["members"][0]["labels"] = [{}]
+        self.assertEqual(len(unmatched_notification_rows(grouping)), 1)
+
     def test_evaluation_updates_preserve_training(self):
         train = {"date": "2024-01-01", "scope": "global"}
         test = {"date": "2026-06-16", "scope": "country", "country_code": "IN"}

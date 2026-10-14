@@ -14,6 +14,9 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 
+from batch_ensemble_tuning import matched_label
+from review_contextualization import evaluation_labels
+
 GROUPS = ["original", "labels", "ensemble", "labels_ensemble"]
 NAMES = {"original": "Chebyshev", "labels": "Chebyshev + labels",
          "ensemble": "Ensemble", "labels_ensemble": "Ensemble + labels",
@@ -36,6 +39,17 @@ def save_figure(fig, output, name):
     fig.savefig(output / f"{name}.pdf", bbox_inches="tight")
     fig.savefig(output / f"{name}.png", dpi=170, bbox_inches="tight")
     plt.close(fig)
+
+
+def reevaluate_test_selections(index, runs, labels, proximity, evaluate_period):
+    updated = {}
+    for (country, seed, variant, selection), saved in index.items():
+        run = runs[country, seed, variant]
+        period = evaluate_period(saved["anomalies"], labels, country,
+                                 run["test_first_date"], run["test_last_date"], proximity)
+        assert period["anomaly_count"] == saved["anomaly_count"]
+        updated[country, seed, variant, selection] = dict(saved, **period)
+    return updated
 
 
 def selected_point(directory, selection, variant, front):
@@ -77,6 +91,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--evaluation-labels", type=Path,
+                        help="updated test labels; training labels must be unchanged")
     args = parser.parse_args()
     source, output = args.results.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -86,6 +102,8 @@ def main():
     sys.path.insert(0, str(source / "inputs"))
     from run_experiment_matrix import evaluate_period
     labels = read_json(source / "inputs/labels.json")
+    if args.evaluation_labels:
+        labels = evaluation_labels(labels, read_json(args.evaluation_labels), config["train_end"])
     summary = list(csv.DictReader((source / "summary.csv").open()))
     runs = {(r["country"], r["seed"], r["variant"]): r
             for p in sorted((source / "runs").glob("*/*/*/result.json")) for r in [read_json(p)]}
@@ -104,6 +122,9 @@ def main():
             assert int(row[field]) == s[field], (row, field)
         assert len(s["anomalies"]) == s["anomaly_count"]
         assert sum(bool(x["matched_starts"]) for x in s["labels"]) == s["country_labels_covered"]
+
+    if args.evaluation_labels:
+        index = reevaluate_test_selections(index, runs, labels, config["proximity_days"], evaluate_period)
 
     common = set.intersection(*[{(c, seed) for (c, seed, v), r in runs.items()
                                 if v == variant and r["status"] == "completed"}
@@ -172,7 +193,14 @@ def main():
     for row in csv.DictReader((source / "detector-differences.csv").open()):
         if (row["country"], int(row["seed"])) not in common:
             continue
-        match = json.loads(row["label_match"])
+        if args.evaluation_labels:
+            run = runs[row["country"], int(row["seed"]), row["variant"]]
+            period_labels = [l for l in labels
+                             if run["test_first_date"] <= l["date"] <= run["test_last_date"]]
+            match = matched_label(row, period_labels, row["country"], config["proximity_days"])
+            row["label_match"] = json.dumps(match)
+        else:
+            match = json.loads(row["label_match"])
         differences.append(dict(row, matched=match is not None))
     diff_totals = []
     for variant in ["ensemble", "labels_ensemble"]:
@@ -195,11 +223,10 @@ def main():
         record["impacts"].append(float(r["impact"]))
 
     snapshots = {}
-    for name, path in [("experiment", source / "inputs/labels.json"),
-                       ("training", source / "inputs/training-labels.json")]:
-        labels = read_json(path)
-        counts = Counter((x["scope"], str(x.get("metadata", {}).get("category", "uncategorized"))) for x in labels)
-        snapshots[name] = dict(total=len(labels), scope=dict(Counter(x["scope"] for x in labels)),
+    for name, items in [("experiment", labels),
+                        ("training", read_json(source / "inputs/training-labels.json"))]:
+        counts = Counter((x["scope"], str(x.get("metadata", {}).get("category", "uncategorized"))) for x in items)
+        snapshots[name] = dict(total=len(items), scope=dict(Counter(x["scope"] for x in items)),
             categories=[dict(scope=scope, category=category, count=count)
                         for (scope, category), count in sorted(counts.items())])
 
@@ -225,7 +252,7 @@ def main():
     metrics = dict(source=str(source), configuration=config, test_start=test_start, test_end=test_end,
         common_country_seed_pairs=sorted(common), status=status, failures=failures, matrix=matrix,
         votes=votes, votes_by_country=vote_country, differences=diff_totals,
-        review_queue=list(queue.values()), labels=snapshots, fronts=fronts)
+        review_queue=list(queue.values()), labels=snapshots, evaluation_labels=labels, fronts=fronts)
     (output / "metrics.json").write_text(json.dumps(metrics, indent=2, ensure_ascii=False) + "\n")
 
     plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.right": False,
@@ -365,7 +392,7 @@ def write_reports(output, m, fronts, seed):
              f"Country-label matching uses a ±{config['proximity_days']}-day window. "
              "Counts describe raw detections before sparse coalescing, impact filtering, and cross-country grouping. "
              "Matched anomalies include country and global labels. A single anomaly may match multiple labels.")
-    inventory = (f"The input snapshot contains {m['labels']['experiment']['total']} labels: "
+    inventory = (f"The evaluation label set contains {m['labels']['experiment']['total']} labels: "
                  f"{m['labels']['experiment']['scope'].get('country', 0)} country and "
                  f"{m['labels']['experiment']['scope'].get('global', 0)} global. "
                  f"Of these, {m['labels']['training']['total']} are dated through the training cutoff.")
@@ -382,8 +409,8 @@ def write_reports(output, m, fronts, seed):
             "", "## Infeasible and skipped runs", "", status_table, "",
             "No feasible solution means that the search budget found no parameters preserving all training labels. "
             "It does not establish that no such parameters exist.", "", "## Overleaf", "",
-            "Replace results.tex with the generated section and upload the three figure PDFs to figures/. "
-            "The section includes the Pareto examples; the other two figures are available for discussion. "
+            "Use the generated table and statistics to update the corresponding manuscript passages. "
+            "The Pareto examples figure is available for the manuscript. "
             "The preamble needs graphicx and booktabs."]
     (output / "results.md").write_text("\n".join(text) + "\n")
     zh = ["# CenAlert 本轮实验结果", "",
@@ -403,7 +430,7 @@ def write_reports(output, m, fronts, seed):
           f"ensemble 独有且未匹配标签的核查队列有 {len(m['review_queue'])} 个国家／种子／开始日期记录，见 unlabeled-ensemble-detections.csv。标签不完整，未匹配异常不能直接作为误报。",
           "", "## 未找到可行解与跳过项", "", status_table, "",
           "未找到可行解表示在本次搜索预算内无法保留全部训练标签。具体缺失标签需要另做诊断运行，失败任务没有保存候选解。",
-          "", "## 更新论文", "", "将 results.tex 内容替换到 Overleaf 的 results.tex，并把 PDF 图上传到 figures/。正文默认只放四国 Pareto 图，另外两张图供讨论。"]
+          "", "## 更新论文", "", "根据生成的表格和统计更新论文对应段落。四国 Pareto 图可用于正文。"]
     (output / "results-zh.md").write_text("\n".join(zh) + "\n")
     latex = [r"\section{Results}", r"\subsection{Experimental Setup}",
              f"We tune on observations through {config['train_end']} and evaluate on {m['test_start']}--{m['test_end']}. "
