@@ -10,7 +10,7 @@ from pathlib import Path
 from batch_ensemble_tuning import label_applies, label_matches, required_labels
 
 VARIANTS = ["original", "labels", "ensemble", "labels_ensemble", "fixed_3sigma"]
-NAMES = {"original": "Single detector", "labels": "Single + labels",
+NAMES = {"original": "Single detector", "labels": "Single detector + labels",
          "ensemble": "Ensemble", "labels_ensemble": "Ensemble + labels", "fixed_3sigma": "Fixed 3σ"}
 
 
@@ -27,7 +27,7 @@ def starts(anomaly):
 
 
 def transport_scores(anomalies):
-    """The frozen CLI requires a numeric score; contextualization never filters on it."""
+    """The CLI requires a numeric score; contextualization never filters on it."""
     return [dict(a, score=0.0) if a.get("score") is None else a for a in anomalies]
 
 
@@ -72,7 +72,7 @@ def calibration_evidence(anomalies, labels, country, proximity, threshold):
     matched = [a for a in matched if a["labels"]]
     expected = min((a["anomaly"]["impact"] for a in matched), default=None)
     if expected != threshold:
-        raise ValueError(f"calibration disagrees with saved Rust filter for {country}: {expected} != {threshold}")
+        raise ValueError(f"calibration disagrees with Rust filter for {country}: {expected} != {threshold}")
     return dict(applicable_training_labels=len(applicable), matched_training_anomalies=len(matched),
                 threshold_sources=[a for a in matched if a["anomaly"]["impact"] == threshold])
 
@@ -182,7 +182,7 @@ def aggregate_rows(rows, binary, labels_by_country, proximity, scratch):
         grouping[str(minimum)]["label_matching"] = notification_matches(
             grouping[str(minimum)], labels_by_country, proximity)
     summary = {key: sum(r[key] for r in rows) for key in
-               ["raw", "raw_sparse", "coalesced", "retained", "labels_total",
+               ["raw", "raw_sparse", "coalesced", "retained", "training_labels_total", "training_labels_covered", "labels_total",
                 "raw_covered", "retained_covered"]}
     summary.update(countries=len(rows), variant=rows[0]["variant"] if rows else None,
                    selection=rows[0]["selection"] if rows else None,
@@ -240,25 +240,99 @@ def write_low_impact_review(path, analysis):
                                              for l in labels[r["country"], a["start"]])))
 
 
-def write_paper_table(path, summary):
+def selection_order(summary):
+    return sorted(summary.values(), key=lambda s: (
+        ["knee", "leftmost", "fixed"].index(s["selection"]), VARIANTS.index(s["variant"])))
+
+
+def infeasible_note(excluded):
+    countries = sorted({r["country"] for r in excluded if r["status"] == "no_feasible_solution"})
+    return (" *Marked configurations found no feasible solution for " + ", ".join(countries) +
+            " within the evaluation budget.") if countries else ""
+
+
+def write_paper_table(path, summary, excluded=()):
+    failed = {r["variant"] for r in excluded if r["status"] == "no_feasible_solution"}
     lines = [r"\begin{table}[t]", r"\centering\small",
-             r"\caption{Contextualization on the common-country cohort. Raw counts anomalies before contextualization; alerts counts final notifications. Matched counts notifications with at least one country/global label match. Labels reports retained country-label coverage. K: knee/fallback; L: leftmost.}",
+             r"\caption{Post-contextualization results. Matched counts alerts with at least one country or global label match; Test labels reports retained country-label coverage. K and L follow Table~\ref{tab:temporal-results}." + infeasible_note(excluded) + "}",
              r"\label{tab:contextualization}", r"\resizebox{\columnwidth}{!}{%",
-             r"\begin{tabular}{llrrrr}", r"\toprule",
-             r"Configuration & Rule & Raw & Alerts & Matched & Labels \\", r"\midrule"]
-    for s in summary.values():
+             r"\begin{tabular}{llrrrrr}", r"\toprule",
+             r"Configuration & Selection & Countries & Raw & Alerts & Matched & Test labels \\", r"\midrule"]
+    previous_selection = None
+    for s in selection_order(summary):
+        if previous_selection is not None and s["selection"] != previous_selection:
+            lines.append(r"\midrule")
+        previous_selection = s["selection"]
         m = s["notification_matching"]["5"]
         name = NAMES[s["variant"]].replace("Fixed 3σ", r"Fixed $3\sigma$")
+        if s["variant"] in failed:
+            name += r"$^{*}$"
         rule = {"knee": "K", "leftmost": "L", "fixed": "--"}[s["selection"]]
-        lines.append(f"{name} & {rule} & {s['raw']} & {m['total']} & {m['matched']} & "
+        lines.append(f"{name} & {rule} & {s['countries']} & {s['raw']} & {m['total']} & {m['matched']} & "
                      f"{s['retained_covered']}/{s['labels_total']} " + r"\\")
     lines += [r"\bottomrule", r"\end{tabular}%", "}", r"\end{table}"]
     path.write_text("\n".join(lines) + "\n")
 
 
+def write_detection_table(path, summary, excluded):
+    failed = {r["variant"] for r in excluded if r["status"] == "no_feasible_solution"}
+    lines = [r"\begin{table}[t]", r"\centering\small",
+             r"\caption{Raw detections and country-label coverage. K: knee/fallback; L: leftmost." + infeasible_note(excluded) + "}",
+             r"\label{tab:temporal-results}", r"\resizebox{\columnwidth}{!}{%",
+             r"\begin{tabular}{llrrrr}", r"\toprule",
+             r"Configuration & Selection & Countries & Train labels & Anomalies & Test labels \\", r"\midrule"]
+    previous_selection = None
+    for s in selection_order(summary):
+        if previous_selection is not None and s["selection"] != previous_selection:
+            lines.append(r"\midrule")
+        previous_selection = s["selection"]
+        name = NAMES[s["variant"]].replace("Fixed 3σ", r"Fixed $3\sigma$")
+        if s["variant"] in failed:
+            name += r"$^{*}$"
+        rule = {"knee": "K", "leftmost": "L", "fixed": "--"}[s["selection"]]
+        lines.append(f"{name} & {rule} & {s['countries']} & {s['training_labels_covered']}/{s['training_labels_total']} & "
+                     f"{s['raw']} & {s['raw_covered']}/{s['labels_total']} " + r"\\")
+    lines += [r"\bottomrule", r"\end{tabular}%", "}", r"\end{table}"]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def calibration_review_rows(countries):
+    rows = []
+    for r in countries:
+        count = r["calibration"]["matched_training_anomalies"]
+        if count > 1:
+            continue
+        sparse = lambda anomalies: sum(a.get("sparse", False) for a in anomalies)
+        sources = r["calibration"]["threshold_sources"]
+        rows.append(dict(configuration=r["variant"], selection=r["selection"], country=r["country"],
+            explained_training_anomalies=count, training_anomalies=r["training_anomalies"],
+            coalesced_training_anomalies=r["coalesced_training_anomalies"], impact_threshold=r["threshold"],
+            test_raw=r["raw"], test_coalesced=r["coalesced"], test_retained=r["retained"],
+            impact_filtered=r["coalesced"]-r["retained"],
+            sparse_coalesced=sparse(r["coalesced_anomalies"]),
+            sparse_filtered=sparse(r["coalesced_anomalies"])-sparse(r["retained_anomalies"]),
+            country_labels_before=r["raw_covered"], country_labels_after=r["retained_covered"],
+            calibration_events="; ".join(f"{l['date']} {l.get('description', '')}" for s in sources for l in s["labels"])))
+    return rows
+
+
+def write_calibration_review(path, countries):
+    rows = calibration_review_rows(countries)
+    fields = ["configuration", "selection", "country", "explained_training_anomalies",
+              "training_anomalies", "coalesced_training_anomalies", "impact_threshold",
+              "test_raw", "test_coalesced", "test_retained", "impact_filtered",
+              "sparse_coalesced", "sparse_filtered", "country_labels_before",
+              "country_labels_after", "calibration_events"]
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def write_configuration_summary(path, summary):
     fields = ["configuration", "selection", "countries", "raw_anomalies", "coalesced_anomalies",
               "impact_retained", "notifications", "matched_notifications", "unmatched_notifications",
+              "training_labels_covered", "training_labels_total",
               "country_labels_before", "country_labels_after", "country_labels_total", "retained_impact_below_one"]
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
@@ -269,6 +343,7 @@ def write_configuration_summary(path, summary):
                 raw_anomalies=s["raw"], coalesced_anomalies=s["coalesced"], impact_retained=s["retained"],
                 notifications=m["total"], matched_notifications=m["matched"],
                 unmatched_notifications=m["total"] - m["matched"], country_labels_before=s["raw_covered"],
+                training_labels_covered=s["training_labels_covered"], training_labels_total=s["training_labels_total"],
                 country_labels_after=s["retained_covered"], country_labels_total=s["labels_total"],
                 retained_impact_below_one=s["low_impact_retained"]))
 
@@ -291,6 +366,21 @@ def report_lines(analysis):
                      f"{s['low_impact_retained']} |")
     lines += ["", "A notification is matched if any constituent matches a country or global label. "
               "The JSON also reports groups with every constituent matched and grouping at four countries.", "",
+              "Country matching uses the configured window; global matching is capped at ±1 day.", "",
+              "## Countries with zero or one explained training anomaly", "",
+              "Counts refer to coalesced training anomalies matching country or global labels. "
+              "Filtered counts exclude reductions due to coalescing and cross-country grouping.", "",
+              "| Configuration | Selection | Explained training anomalies | Countries | Coalesced test anomalies | Impact filtered | Sparse filtered |",
+              "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
+    calibration = calibration_review_rows(analysis["countries"])
+    for s in analysis["available_summary"].values():
+        for count in [0, 1]:
+            rows = [r for r in calibration if r["configuration"] == s["variant"]
+                    and r["selection"] == s["selection"] and r["explained_training_anomalies"] == count]
+            lines.append(f"| {NAMES[s['variant']]} | {s['selection']} | {count} | {len(rows)} | "
+                         f"{sum(r['test_coalesced'] for r in rows)} | {sum(r['impact_filtered'] for r in rows)} | "
+                         f"{sum(r['sparse_filtered'] for r in rows)} |")
+    lines += ["",
               "## Low-impact retained anomalies", "",
               "The following countries have retained IF < 1 anomalies under label-constrained ensemble "
               "knee/fallback selection, including all available countries.", "",
@@ -346,6 +436,9 @@ def main():
                         help="updated labels for test-period attribution; training labels must be unchanged")
     parser.add_argument("--all-configurations", action="store_true",
                         help="compare all four tuned configurations and the fixed baseline on common countries")
+    parser.add_argument("--binary", type=Path,
+                        default=Path(__file__).resolve().parents[1] / "target/release/cenalert-detector",
+                        help="current detector build used for contextualization")
     args = parser.parse_args()
     if args.sparse_gap_days < 0:
         parser.error("sparse gap must be non-negative")
@@ -365,7 +458,9 @@ def main():
     if any(label["date"] > cutoff for label in training_labels):
         raise ValueError("training-label snapshot contains post-cutoff labels")
     test_labels = [l for l in labels if first <= l["date"] <= end]
-    binary = root / "inputs/cenalert-detector"
+    binary = args.binary.resolve()
+    if not binary.is_file():
+        parser.error("build the release binary or pass --binary")
     args.output.mkdir(parents=True, exist_ok=True)
     variants = VARIANTS if args.all_configurations else ["labels_ensemble"]
     runs = {(c, v): read(root / f"runs/{seed}/{c}/{v}/result.json")
@@ -396,6 +491,7 @@ def main():
                 labels_by_country[country] = period_labels
                 required = required_labels(period_labels, country, result["test_first_date"],
                                            result["test_last_date"], 0)
+                train_required = required_labels(training_labels, country, "0001-01-01", cutoff, 0)
                 for selection in (["fixed"] if variant == "fixed_3sigma" else ["knee", "leftmost"]):
                     detection = read(directory / f"{selection}-detection.json")
                     all_anomalies = detection["anomalies"]
@@ -417,6 +513,9 @@ def main():
                     assert coverage(coalesced, required, proximity) == raw_covered
                     countries.append(dict(country=country, variant=variant, selection=selection,
                         threshold=threshold, calibration=evidence, training_anomalies=len(training),
+                        coalesced_training_anomalies=len(calibrated),
+                        training_labels_total=len(train_required),
+                        training_labels_covered=len(coverage([a for a in all_anomalies if a["start"] <= cutoff], train_required, proximity)),
                         raw=len(raw), raw_sparse=sum(a.get("sparse", False) for a in raw),
                         coalesced=len(coalesced), retained=len(retained),
                         labels_total=len(required), raw_covered=len(raw_covered),
@@ -441,6 +540,8 @@ def main():
                     summary[name], grouping[name] = aggregate_rows(
                         selected, binary, labels_by_country, proximity, scratch)
     analysis = dict(source=str(root), train_end=cutoff, test_end=end, seed=seed,
+                    contextualization_binary=str(binary), country_proximity_days=proximity,
+                    global_proximity_days=min(proximity, 1),
                     sparse_gap_days=args.sparse_gap_days, threshold_reference="training",
                     all_configurations=args.all_configurations, comparison_countries=common,
                     summary=summary, available_summary=available_summary, excluded=excluded,
@@ -451,9 +552,12 @@ def main():
     write_unmatched_notifications(args.output / "unmatched-notifications.csv",
                                   available_grouping[key("labels_ensemble", "knee")]["5"])
     write_low_impact_review(args.output / "low-impact-review.csv", analysis)
+    write_calibration_review(args.output / "low-calibration-countries.csv", countries)
     if args.all_configurations:
-        write_paper_table(args.output / "contextualization-table.tex", summary)
+        write_paper_table(args.output / "contextualization-table.tex", available_summary, excluded)
+        write_detection_table(args.output / "detection-table.tex", available_summary, excluded)
         write_configuration_summary(args.output / "configuration-summary.csv", summary)
+        write_configuration_summary(args.output / "available-configuration-summary.csv", available_summary)
     (args.output / "report.md").write_text("\n".join(report_lines(analysis)) + "\n")
     print(json.dumps(summary, indent=2))
 

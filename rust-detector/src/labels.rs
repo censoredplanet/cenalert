@@ -58,6 +58,14 @@ pub struct EventLabel {
 }
 
 impl EventLabel {
+    fn matches_distance(&self, distance_days: i64, proximity_days: i64) -> bool {
+        let window = match self.scope {
+            LabelScope::Country => proximity_days,
+            LabelScope::Global => proximity_days.min(1),
+        };
+        self.match_mode.matches(distance_days, window)
+    }
+
     pub fn new(date: NaiveDate, scope: LabelScope) -> Self {
         Self {
             date,
@@ -176,7 +184,7 @@ pub fn label_coverage(
             anomalies.iter().any(|anomaly| {
                 anomaly_start_dates(anomaly).any(|start| {
                     let distance_days = start.signed_duration_since(label.date).num_days();
-                    label.match_mode.matches(distance_days, proximity_days)
+                    label.matches_distance(distance_days, proximity_days)
                 })
             })
         })
@@ -203,7 +211,7 @@ pub fn match_anomaly_to_label(
         .filter_map(|(index, label)| {
             anomaly_start_dates(anomaly)
                 .map(|start| start.signed_duration_since(label.date).num_days())
-                .filter(|distance| label.match_mode.matches(*distance, proximity_days))
+                .filter(|distance| label.matches_distance(*distance, proximity_days))
                 .min_by_key(|distance| distance.abs())
                 .map(|distance| (index, label, distance))
         })
@@ -393,7 +401,7 @@ mod tests {
         ];
         let anomalies = vec![
             anomaly("2025-01-07"),
-            anomaly("2025-02-13"),
+            anomaly("2025-02-11"),
             anomaly("2025-03-14"),
         ];
 
@@ -419,6 +427,45 @@ mod tests {
             label_coverage(&labels, &[anomaly("2025-01-11")], 0).missed,
             1
         );
+    }
+
+    #[test]
+    fn global_window_is_one_day_on_both_sides() {
+        let global = label("2025-01-10", LabelScope::Global);
+        let country = label("2025-01-10", LabelScope::Country);
+        for (day, expected) in [
+            (7, false),
+            (8, false),
+            (9, true),
+            (10, true),
+            (11, true),
+            (12, false),
+            (13, false),
+        ] {
+            let a = anomaly(&format!("2025-01-{day:02}"));
+            assert_eq!(
+                label_coverage(std::slice::from_ref(&global), std::slice::from_ref(&a), 3).matched,
+                usize::from(expected)
+            );
+            assert_eq!(
+                match_anomaly_to_label(&a, std::slice::from_ref(&global), Some("RU"), 3).is_some(),
+                expected
+            );
+            assert_eq!(
+                label_coverage(std::slice::from_ref(&country), &[a], 3).matched,
+                1
+            );
+        }
+        assert!(match_anomaly_to_label(
+            &anomaly("2025-01-11"),
+            std::slice::from_ref(&global),
+            None,
+            0
+        )
+        .is_none());
+        let mut exact = global;
+        exact.match_mode = LabelMatchMode::Exact;
+        assert!(match_anomaly_to_label(&anomaly("2025-01-11"), &[exact], None, 3).is_none());
     }
 
     #[test]

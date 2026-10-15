@@ -159,6 +159,24 @@ mod tests {
     }
 
     #[test]
+    fn distant_global_match_does_not_lower_impact_threshold() {
+        let mut global = label("RU", "2025-01-03");
+        global.scope = LabelScope::Global;
+        let labels = vec![global, label("RU", "2025-02-04")];
+        let context = FilterContext {
+            labels: &labels,
+            country_code: "RU",
+            proximity_days: 3,
+        };
+        let result = MinimumLabeledImpactFilter.apply(
+            vec![anomaly("2025-01-01", 0.1), anomaly("2025-02-01", 4.0)],
+            &context,
+        );
+        assert_eq!(result.impact_threshold, Some(4.0));
+        assert_eq!(result.discarded.len(), 1);
+    }
+
+    #[test]
     fn discards_anomalies_below_the_weakest_labeled_anomaly() {
         let labels = vec![label("RU", "2025-01-10"), label("RU", "2025-01-20")];
         let context = FilterContext {

@@ -10,13 +10,49 @@ from review_contextualization import (
     calibration_evidence, common_completed_countries, low_impact_rows,
     transport_scores, restore_null_scores,
     write_low_impact_review, write_paper_table,
-    write_configuration_summary,
+    write_configuration_summary, calibration_review_rows, write_detection_table,
 )
+from batch_ensemble_tuning import label_matches
+from datetime import date
 
 
 class ContextualizationReviewTests(unittest.TestCase):
+    def test_global_window_is_capped_at_one_day(self):
+        for scope in ["country", "global"]:
+            label = dict(scope=scope, date="2025-01-10")
+            for offset in range(-4, 5):
+                day = date(2025, 1, 10 + offset)
+                self.assertEqual(label_matches(label, day, 3), abs(offset) <= (1 if scope == "global" else 3))
+            self.assertFalse(label_matches(label, date(2025, 1, 11), 0))
+            label["match_mode"] = "exact"
+            self.assertFalse(label_matches(label, date(2025, 1, 11), 3))
+
+    def test_calibration_count_is_anomalies_not_number_of_matching_labels(self):
+        a = dict(start="2024-01-01", impact=.2)
+        labels = [dict(scope="global", date="2024-01-02"),
+                  dict(scope="country", date="2024-01-04", country_code="RU")]
+        result = calibration_evidence([a], labels, "RU", 3, .2)
+        self.assertEqual(result["matched_training_anomalies"], 1)
+        self.assertEqual(len(result["threshold_sources"][0]["labels"]), 2)
+        labels[0]["date"] = "2024-01-03"
+        self.assertEqual(calibration_evidence([a], labels[:1], "RU", 3, None)["matched_training_anomalies"], 0)
+
+    def test_low_calibration_counts_only_impact_removals(self):
+        row = dict(variant="ensemble", selection="knee", country="SR", threshold=2,
+                   calibration=dict(matched_training_anomalies=1, threshold_sources=[]),
+                   training_anomalies=3, coalesced_training_anomalies=2, raw=5, coalesced=3, retained=1,
+                   raw_covered=1, retained_covered=0,
+                   coalesced_anomalies=[dict(sparse=True), dict(sparse=True), dict(sparse=False)],
+                   retained_anomalies=[dict(sparse=False)])
+        result, = calibration_review_rows([row])
+        self.assertEqual(result["impact_filtered"], 2)
+        self.assertEqual(result["sparse_filtered"], 2)
+        row["calibration"]["matched_training_anomalies"] = 2
+        self.assertEqual(calibration_review_rows([row]), [])
+
     def test_summary_csv_reports_notifications_and_retained_labels(self):
         summary = {"original/knee": dict(variant="original", selection="knee", countries=2,
+                   training_labels_total=5, training_labels_covered=4,
                    raw=10, coalesced=9, retained=7, raw_covered=3, retained_covered=2,
                    labels_total=4, low_impact_retained=1,
                    notification_matching={"5": dict(total=6, matched=4)})}
@@ -49,15 +85,26 @@ class ContextualizationReviewTests(unittest.TestCase):
         self.assertEqual(rows[0]["test_label_matches"], "2026-01-01 Block")
 
     def test_paper_table_uses_post_filter_coverage(self):
-        summary = {"fixed_3sigma/fixed": dict(variant="fixed_3sigma", selection="fixed", raw=8,
+        summary = {"fixed_3sigma/fixed": dict(variant="fixed_3sigma", selection="fixed", countries=71, raw=8,
                    retained_covered=2, labels_total=3,
                    notification_matching={"5": dict(total=4, matched=3)})}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "table.tex"
             write_paper_table(path, summary)
             text = path.read_text()
-        self.assertIn(r"Fixed $3\sigma$ & -- & 8 & 4 & 3 & 2/3", text)
+        self.assertIn(r"Fixed $3\sigma$ & -- & 71 & 8 & 4 & 3 & 2/3", text)
         self.assertIn(r"\label{tab:contextualization}", text)
+
+    def test_detection_table_marks_only_failed_configuration(self):
+        summary = {v: dict(variant=v, selection="knee", countries=n, raw=8,
+                          training_labels_covered=3, training_labels_total=4,
+                          raw_covered=2, labels_total=3) for v, n in [("original", 71), ("labels", 68)]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "table.tex"
+            write_detection_table(path, summary, [dict(country="IN", variant="labels", status="no_feasible_solution")])
+            text = path.read_text()
+        self.assertIn(r"Single detector & K & 71", text)
+        self.assertIn(r"Single detector + labels$^{*}$ & K & 68", text)
 
     def test_null_scores_round_trip_without_changing_measurements(self):
         original = [dict(country="RU", start="2024-01-01", score=None, impact=2),

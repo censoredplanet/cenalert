@@ -258,9 +258,9 @@ Country labels outside the input series' date range and proximity margin are
 also ignored, so one multi-country label file can be reused with historical
 snapshots.
 
-Regular labels use `"match_mode": "proximity"` by default and match when an
-anomaly start date is within three days before or after the label date. These
-applicable country labels constrain tuning. Set `"match_mode": "exact"` for a
+Regular labels use `"match_mode": "proximity"` by default. Country events match
+within `--proximity-days` (default ±3 days); global events use the same window
+capped at ±1 day. Applicable country labels constrain tuning. Set `"match_mode": "exact"` for a
 pseudo-label that attributes only an anomaly beginning on that exact date;
 pseudo-labels never constrain tuning because a methodology change is not
 necessarily detectable in every series:
@@ -753,8 +753,9 @@ python3 scripts/review_contextualization.py \
 ```
 
 For a completed single-seed experiment, this reviews every successful
-label-constrained ensemble country under knee and leftmost selection. It uses
-the saved Rust binary for sparse coalescing and cross-country grouping.
+label-constrained ensemble country under knee and leftmost selection. Build with
+`cargo build --release` first; it uses `target/release/cenalert-detector` for
+contextualization, or the executable supplied with `--binary`.
 Impact thresholds are calibrated on coalesced, label-matched training
 anomalies and held fixed for the test period. Countries with no calibration
 match retain all candidates. Intervals crossing the training cutoff are
@@ -774,8 +775,12 @@ baseline on countries completed by every configuration. The report shows raw,
 coalesced, impact-retained, and grouped counts, notification matches, and country-label
 retention. `analysis.json` also contains available-country comparisons and the
 training anomalies and labels that set each impact threshold, including the
-retained anomalies with impact below one. `configuration-summary.csv` and
-`contextualization-table.tex` contain the common-country comparison.
+retained anomalies with impact below one. `configuration-summary.csv` contains
+the common-country comparison. `available-configuration-summary.csv`,
+`detection-table.tex`, and `contextualization-table.tex` report each configuration's
+completed countries, with country counts and infeasible configurations marked in the tables.
+`low-calibration-countries.csv` lists countries with zero or one explained coalesced
+training anomaly and their test-period impact removals, including sparse removals.
 `low-impact-review.csv` traces each retained IF < 1 anomaly in the available-country
 label-constrained ensemble knee/fallback output to its calibration event(s).
 

@@ -93,7 +93,7 @@ struct TuneArgs {
     /// Optional labels; applicable proximity labels constrain feasible parameter sets.
     #[arg(long)]
     labels: Option<PathBuf>,
-    /// Maximum distance for constraining proximity labels and label attribution.
+    /// Country-label window in days; global attribution is capped at one day.
     #[arg(long, requires = "labels")]
     proximity_days: Option<u32>,
     /// Lower bound of the Chebyshev K search range.
@@ -137,7 +137,7 @@ struct FilterArgs {
     /// Destination for retained and discarded anomalies.
     #[arg(long)]
     output: PathBuf,
-    /// Maximum distance for label attribution.
+    /// Country-label window in days; global attribution is capped at one day.
     #[arg(long, default_value_t = 3)]
     proximity_days: u32,
     /// Merge sparse anomalies separated by at most this many normal days.

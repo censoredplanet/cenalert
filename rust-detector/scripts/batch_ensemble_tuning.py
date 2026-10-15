@@ -185,7 +185,8 @@ def label_matches(label: dict[str, Any], anomaly_date: date, proximity_days: int
     distance = (anomaly_date - date.fromisoformat(label["date"])).days
     if label.get("match_mode", "proximity") == "exact":
         return distance == 0
-    return abs(distance) <= proximity_days
+    window = min(proximity_days, 1) if label["scope"] == "global" else proximity_days
+    return abs(distance) <= window
 
 
 def required_labels(
@@ -713,7 +714,7 @@ def write_report(
         f"- Unified labels supplied: {len(json.loads(arguments.labels.read_text()))}",
         f"- NSGA-II evaluations per non-zero country: {arguments.evaluations:,}",
         f"- Population size: {arguments.population_size}",
-        f"- Label proximity: ±{arguments.proximity_days} days",
+        f"- Country-label proximity: ±{arguments.proximity_days} days; global: ±{min(arguments.proximity_days, 1)} day(s)",
         "- Sparse anomaly coalescing: at most "
         f"{arguments.coalesce_sparse_gap_days} normal day(s) between components",
         "- Cross-country grouping threshold: "
