@@ -229,7 +229,8 @@ jointly tunes:
 3. the Isolation Forest and LOF minimum scores.
 
 The ensemble efficiency range is `[0.05, 0.1]`, the residual-ratio range is
-`[0, 1]`, and the LOF minimum-score range is `[1.1, 3.0]`.
+`[0, 1]`, the Isolation Forest minimum-score range is `[0.6, 1.0]`, and the
+LOF minimum-score range is `[1.2, 3.0]`.
 
 ```bash
 cargo run --release -- \
@@ -368,6 +369,36 @@ builder validates columns and dates, deduplicates labels with the same scope,
 country, date, and description, and reports distinct same-day records for
 manual review. Country and global records of the same event remain separate.
 Pass the generated JSON to the experiment runner's `--labels` option below.
+
+To append reviewed updates to an existing private label file, preserving its
+descriptions and metadata:
+
+```bash
+.venv/bin/python scripts/merge_label_updates.py \
+  --labels /path/to/labels.json \
+  --additional-events /path/to/update.csv \
+  --output /path/to/labels.json
+```
+
+The update sheet may omit the final source column; its filename supplies the
+source in that case. Identical events are skipped; conflicting descriptions
+on the same country/date require review. Keep private updates outside Git.
+New training-period labels require a new tuning run and input snapshot.
+
+Export unmatched training anomalies from saved label-constrained ensemble
+results for manual review:
+
+```bash
+.venv/bin/python scripts/export_unmatched_training.py \
+  --results /path/to/results --labels /path/to/labels.json \
+  --output /path/to/unmatched-training-anomalies.csv
+```
+
+This uses knee/fallback selection across completed countries, coalesces sparse
+anomalies with at most one intervening day, and exports unmatched intervals
+before impact filtering. Intervals ending after the training cutoff are excluded.
+Country matching uses the experiment's proximity window; global matching is
+capped at one day. Use `--selection leftmost` to review that selection instead.
 
 The manually verified sheets are included as provided; the builder does not
 revalidate those events against the selected time series. Before constrained

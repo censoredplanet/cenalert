@@ -108,6 +108,8 @@ def prepare_inputs(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]
         "k_min": 5.0, "k_max": 18.0,
         "initial_population_seeded": False,
         "efficiency_bounds": {"chebyshev": [0.01, 0.1], "ensemble": [0.05, 0.1]},
+        "ensemble_score_bounds": {"isolation_forest": [0.6, 1.0], "lof": [1.2, 3.0]},
+        "global_proximity_days": min(args.proximity_days, 1),
         "postprocessing": False,
         "train_end": str(args.train_end), "test_end": str(args.test_end),
         "baseline_window": args.baseline_window, "baseline_sigma": 3.0,

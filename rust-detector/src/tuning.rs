@@ -288,8 +288,8 @@ fn create_ensemble_problem(
         real_variable(EFFICIENCY, 0.05, 0.1)?,
         real_variable(Z, 3.0, 5.0)?,
         real_variable(K, config.k_min, config.k_max)?,
-        real_variable(ISOLATION_FOREST_MIN_SCORE, 0.5, 1.0)?,
-        real_variable(LOF_MIN_SCORE, 1.1, 3.0)?,
+        real_variable(ISOLATION_FOREST_MIN_SCORE, 0.6, 1.0)?,
+        real_variable(LOF_MIN_SCORE, 1.2, 3.0)?,
     ];
     let constraints = (!required_labels.is_empty()).then(|| {
         vec![Constraint::new(
@@ -611,8 +611,8 @@ mod tests {
             assert!((0.05..=0.1).contains(&parameters.efficiency));
             assert!((3.0..=5.0).contains(&parameters.chebyshev_z));
             assert!((5.0..=18.0).contains(&parameters.chebyshev_k));
-            assert!((0.5..=1.0).contains(&parameters.isolation_forest_min_score));
-            assert!((1.1..=3.0).contains(&parameters.lof_min_score));
+            assert!((0.6..=1.0).contains(&parameters.isolation_forest_min_score));
+            assert!((1.2..=3.0).contains(&parameters.lof_min_score));
         }
     }
 

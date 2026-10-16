@@ -91,10 +91,14 @@ def read_additional_events(path: Path) -> list[dict[str, str]]:
         records = list(csv.reader(event_file))
     if not records:
         return []
-    if tuple(value.strip() for value in records[0]) == EVENT_FIELDS:
+    if tuple(value.strip() for value in records[0]) in (EVENT_FIELDS, EVENT_FIELDS[:-1]):
         records = records[1:]
     rows = []
     for row_number, values in enumerate(records, start=1):
+        if not any(value.strip() for value in values):
+            continue
+        if len(values) == len(EVENT_FIELDS) - 1:
+            values = [*values, path.name]
         if len(values) != len(EVENT_FIELDS):
             raise ValueError(
                 f"{path}:{row_number} has {len(values)} columns; "
