@@ -91,6 +91,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--pareto-countries", nargs="+", default=["TR", "OM"],
+                        help="countries shown in the manuscript Pareto figure")
     parser.add_argument("--evaluation-labels", type=Path,
                         help="updated test labels; training labels must be unchanged")
     args = parser.parse_args()
@@ -252,7 +254,8 @@ def main():
     metrics = dict(source=str(source), configuration=config, test_start=test_start, test_end=test_end,
         common_country_seed_pairs=sorted(common), status=status, failures=failures, matrix=matrix,
         votes=votes, votes_by_country=vote_country, differences=diff_totals,
-        review_queue=list(queue.values()), labels=snapshots, evaluation_labels=labels, fronts=fronts)
+        review_queue=list(queue.values()), labels=snapshots, evaluation_labels=labels, fronts=fronts,
+        pareto_countries=args.pareto_countries)
     (output / "metrics.json").write_text(json.dumps(metrics, indent=2, ensure_ascii=False) + "\n")
 
     plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.right": False,
@@ -298,8 +301,12 @@ def main():
     save_figure(fig, output, "ensemble-votes")
 
     seed = config["seeds"][0]
-    examples = ["TR", "AE", "CN", "RU"]
-    fig, axes = plt.subplots(2, 2, figsize=(8.0, 6.2), layout="constrained")
+    examples = args.pareto_countries
+    missing = [c for c in examples if (c, seed, "labels_ensemble") not in front_index]
+    if missing:
+        raise ValueError(f"No completed label-constrained ensemble front for: {', '.join(missing)}")
+    fig, axes = plt.subplots(1, len(examples), squeeze=False,
+                             figsize=(4.0 * len(examples), 2.8), layout="constrained")
     for ax, c in zip(axes.flat, examples):
         info = front_index[c, seed, "labels_ensemble"]
         draw_front(ax, info)
@@ -350,7 +357,6 @@ def write_reports(output, m, fronts, seed):
     baseline = by_key["fixed_3sigma", "fixed"]
     total = labeled["country_labels_total"]
     lof = next(r for r in m["votes"] if (r["variant"], r["selection"]) == ("labels_ensemble", "knee"))
-    failed = ", ".join(sorted({r["country"] for r in m["failures"] if r["status"] == "no_feasible_solution"}))
     skipped = ", ".join(sorted({r["country"] for r in m["failures"] if r["status"].startswith("skipped")}))
     rows = []
     for r in m["matrix"]:
@@ -399,7 +405,7 @@ def write_reports(output, m, fronts, seed):
     text = ["# CenAlert temporal evaluation", "", setup, "", "## Evaluation matrix", "", matrix_table, "", comparison,
             "", "![Evaluation matrix](evaluation-matrix.png)", "", "## Parameter selection", "", selection,
             "", "![Training Pareto fronts](pareto-examples.png)", "",
-            "The four examples retain TR, AE, CN, and RU. Markers locate the saved selected parameters on the training fronts.",
+            f"Examples: {', '.join(m['pareto_countries'])}. Markers locate the saved selected parameters on the training fronts.",
             "", "[All-country fronts](pareto-all-countries.pdf)", "", "## Ensemble members", "", members, "", vote_table,
             "", "![Member votes](ensemble-votes.png)", "", "## Labels and review", "", inventory, "", missing_table,
             "", f"The unlabeled ensemble-only review queue contains {len(m['review_queue'])} distinct country/seed/start records. "
@@ -415,14 +421,14 @@ def write_reports(output, m, fronts, seed):
     (output / "results.md").write_text("\n".join(text) + "\n")
     zh = ["# CenAlert 本轮实验结果", "",
           f"训练截至 {config['train_end']}，测试期为 {m['test_start']} 至 {m['test_end']}。每组调参 {config['evaluations']:,} 次，种群 {config['population_size']}，种子 {seed}。",
-          f"主表统一使用 {n} 个国家。单检测器＋标签在 {failed} 未找到可行解；{skipped} 因训练数据全零跳过。",
+          f"主表统一使用 {n} 个国家。各配置未完成的国家见下方明细；{skipped} 因训练数据全零跳过。",
           "", "## 四组对照与固定基线", "", matrix_table, "",
           f"Ensemble 的 knee/fallback 输出为 {plain['anomaly_count']} 个异常、覆盖 {plain['country_labels_covered']}/{total} 个测试标签；加入训练标签约束后为 {labeled['anomaly_count']} 个异常、覆盖 {labeled['country_labels_covered']}/{total}。",
           f"固定 3σ 产生 {baseline['anomaly_count']} 个异常，覆盖 {baseline['country_labels_covered']}/{total}。",
           "以上均为过滤前的异常。Matched test anomalies 是匹配到国家或全球标签的异常数量，一个异常可能匹配多个标签。",
           "", "![四组对照](evaluation-matrix.png)", "", "## 参数选择", "",
           f"带标签 ensemble 使用 leftmost 得到 {left['anomaly_count']} 个异常、覆盖 {left['country_labels_covered']}/{total}，使用 knee/fallback 得到 {labeled['anomaly_count']} 个异常、覆盖 {labeled['country_labels_covered']}/{total}。",
-          "", "![Pareto 曲线](pareto-examples.png)", "", "示例继续使用 TR、AE、CN、RU。全部国家的四组曲线见 pareto-all-countries.pdf。",
+          "", "![Pareto 曲线](pareto-examples.png)", "", f"示例国家：{', '.join(m['pareto_countries'])}。全部国家的四组曲线见 pareto-all-countries.pdf。",
           "", "## 成员投票", "", vote_table, "",
           f"带标签 ensemble 的 knee/fallback 输出包括 {lof.get('dense', 0)} 个稠密异常和 {lof.get('croston', 0)} 个稀疏异常。LOF 在 {lof.get('lof_decisive', 0)} 个稠密异常起点提供凑足多数票的第二票。",
           "", "![投票分布](ensemble-votes.png)", "", "## 未覆盖的测试标签", "", missing_table, "",
@@ -430,14 +436,20 @@ def write_reports(output, m, fronts, seed):
           f"ensemble 独有且未匹配标签的核查队列有 {len(m['review_queue'])} 个国家／种子／开始日期记录，见 unlabeled-ensemble-detections.csv。标签不完整，未匹配异常不能直接作为误报。",
           "", "## 未找到可行解与跳过项", "", status_table, "",
           "未找到可行解表示在本次搜索预算内无法保留全部训练标签。具体缺失标签需要另做诊断运行，失败任务没有保存候选解。",
-          "", "## 更新论文", "", "根据生成的表格和统计更新论文对应段落。四国 Pareto 图可用于正文。"]
+          "", "## 更新论文", "", "根据生成的表格和统计更新论文对应段落。Pareto 示例图可用于正文。"]
     (output / "results-zh.md").write_text("\n".join(zh) + "\n")
+    failure_text = " ".join(
+        f"{NAMES[v]} found no feasible solution for " +
+        ", ".join(sorted(r['country'] for r in m['failures']
+                        if r['variant'] == v and r['status'] == 'no_feasible_solution')) + "."
+        for v in GROUPS if any(r['variant'] == v and r['status'] == 'no_feasible_solution'
+                              for r in m['failures']))
     latex = [r"\section{Results}", r"\subsection{Experimental Setup}",
              f"We tune on observations through {config['train_end']} and evaluate on {m['test_start']}--{m['test_end']}. "
              f"Each tuned configuration uses {config['evaluations']:,} NSGA-II evaluations and a population of {config['population_size']}. "
              f"We report one run with seed {seed}; the initial population is unseeded. "
              rf"Table~\ref{{tab:cenalert-matrix}} compares {n} countries completed by all configurations. "
-             f"Constrained Chebyshev tuning found no feasible solution for {failed} within this budget. "
+             f"{failure_text} "
              f"{skipped} has an all-zero training series. "
              "The counts precede sparse coalescing, impact filtering, and cross-country notification grouping. "
              "Label coverage uses country events and a start-date proximity window of three days. "
@@ -455,7 +467,7 @@ def write_reports(output, m, fronts, seed):
     latex += [r"\bottomrule\end{tabular}", r"\end{table*}", r"\subsection{Detection and Label Coverage}", comparison,
               "Unmatched detections remain candidates for investigation. These partial labels do not establish overall precision or recall.",
               r"\subsection{Parameter Selection}", selection,
-              r"Figure~\ref{fig:pareto-selection} shows training fronts and selected solutions for four countries.",
+              r"Figure~\ref{fig:pareto-selection} shows training fronts and selected solutions for " + ", ".join(m['pareto_countries']) + ".",
               r"\begin{figure*}[t]", r"\centering",
               r"\includegraphics[width=0.85\textwidth]{figures/pareto-examples.pdf}",
               r"\caption{Training Pareto fronts for label-constrained ensemble tuning. The axes show anomaly count and total impact. Markers identify the selected knee or fallback and the leftmost solution.}",

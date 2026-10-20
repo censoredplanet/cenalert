@@ -246,9 +246,42 @@ def selection_order(summary):
 
 
 def infeasible_note(excluded):
-    countries = sorted({r["country"] for r in excluded if r["status"] == "no_feasible_solution"})
-    return (" *Marked configurations found no feasible solution for " + ", ".join(countries) +
-            " within the evaluation budget.") if countries else ""
+    notes = []
+    for variant in VARIANTS:
+        countries = sorted({r["country"] for r in excluded
+                            if r["variant"] == variant and r["status"] == "no_feasible_solution"})
+        if countries:
+            notes.append(NAMES[variant] + ": " + ", ".join(countries))
+    return (" *No feasible solution within the evaluation budget (" + "; ".join(notes) + ").") if notes else ""
+
+
+def write_combined_table(path, summary, excluded=()):
+    failed = {r["variant"] for r in excluded if r["status"] == "no_feasible_solution"}
+    lines = [r"\begin{table*}[t]", r"\centering\small",
+             r"\caption{Detection and contextualization results. K: knee/fallback; L: leftmost. "
+             r"Test coverage is shown before $\rightarrow$ after contextualization. "
+             r"Matched counts alerts associated with a country or global label."
+             + infeasible_note(excluded) + "}",
+             r"\label{tab:temporal-results}", r"\begin{tabular}{llrrrrrr}", r"\toprule",
+             r"Configuration & Selection & Countries & Train labels & Anomalies & Alerts & Matched & Test coverage \\",
+             r"\midrule"]
+    previous = None
+    for s in selection_order(summary):
+        if previous is not None and previous != s["selection"]:
+            lines.append(r"\midrule")
+        previous = s["selection"]
+        name = NAMES[s["variant"]].replace("Fixed 3σ", r"Fixed $3\sigma$")
+        if s["variant"] in failed:
+            name += r"$^{*}$"
+        rule = {"knee": "K", "leftmost": "L", "fixed": "--"}[s["selection"]]
+        match = s["notification_matching"]["5"]
+        lines.append(f"{name} & {rule} & {s['countries']} & "
+                     f"{s['training_labels_covered']}/{s['training_labels_total']} & "
+                     f"{s['raw']} & {match['total']} & {match['matched']} & "
+                     f"${s['raw_covered']}/{s['labels_total']} " + r"\rightarrow " +
+                     f"{s['retained_covered']}/{s['labels_total']}$ " + r"\\")
+    lines += [r"\bottomrule", r"\end{tabular}", r"\end{table*}"]
+    path.write_text("\n".join(lines) + "\n")
 
 
 def write_paper_table(path, summary, excluded=()):
@@ -554,6 +587,7 @@ def main():
     write_low_impact_review(args.output / "low-impact-review.csv", analysis)
     write_calibration_review(args.output / "low-calibration-countries.csv", countries)
     if args.all_configurations:
+        write_combined_table(args.output / "combined-table.tex", available_summary, excluded)
         write_paper_table(args.output / "contextualization-table.tex", available_summary, excluded)
         write_detection_table(args.output / "detection-table.tex", available_summary, excluded)
         write_configuration_summary(args.output / "configuration-summary.csv", summary)

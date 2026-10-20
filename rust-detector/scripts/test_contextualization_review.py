@@ -10,13 +10,29 @@ from review_contextualization import (
     calibration_evidence, common_completed_countries, low_impact_rows,
     transport_scores, restore_null_scores,
     write_low_impact_review, write_paper_table,
-    write_configuration_summary, calibration_review_rows, write_detection_table,
+    write_configuration_summary, calibration_review_rows, write_detection_table, write_combined_table,
 )
 from batch_ensemble_tuning import label_matches
 from datetime import date
 
 
 class ContextualizationReviewTests(unittest.TestCase):
+    def test_combined_table_preserves_coverage_and_configuration_failures(self):
+        summary = {"labels_ensemble/knee": dict(variant="labels_ensemble", selection="knee",
+                   countries=70, training_labels_covered=290, training_labels_total=290,
+                   raw=300, raw_covered=45, retained_covered=40, labels_total=53,
+                   notification_matching={"5": dict(total=140, matched=60)})}
+        excluded = [dict(variant="labels", country="ES", status="no_feasible_solution"),
+                    dict(variant="labels_ensemble", country="RU", status="no_feasible_solution")]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "table.tex"
+            write_combined_table(path, summary, excluded)
+            text = path.read_text()
+        self.assertIn("290/290", text)
+        self.assertIn(r"45/53 \rightarrow 40/53", text)
+        self.assertIn("Single detector + labels: ES; Ensemble + labels: RU", text)
+        self.assertIn(r"Ensemble + labels$^{*}$ & K & 70", text)
+
     def test_global_window_is_capped_at_one_day(self):
         for scope in ["country", "global"]:
             label = dict(scope=scope, date="2025-01-10")

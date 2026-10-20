@@ -47,9 +47,12 @@ class TemporalSummaryTests(unittest.TestCase):
                                              country_labels_total=8)))
         metrics = dict(configuration=dict(train_end="2020-12-31", evaluations=100,
                                           population_size=10, proximity_days=3),
-                       common_country_seed_pairs=[("RU", 1)], matrix=matrix,
+                       common_country_seed_pairs=[("RU", 1)], matrix=matrix, pareto_countries=["TR", "AE"],
                        votes=[dict(variant="labels_ensemble", selection="knee", dense=10,
-                                   croston=7)], failures=[], missed_test_labels=[],
+                                   croston=7)], failures=[
+                           dict(country="ES", variant="labels", status="no_feasible_solution"),
+                           dict(country="RU", variant="labels_ensemble", status="no_feasible_solution")],
+                       missed_test_labels=[],
                        test_start="2021-01-01", test_end="2021-12-31",
                        labels=dict(experiment=dict(total=19, scope={"country": 16, "global": 3}),
                                    training=dict(total=10)), review_queue=[])
@@ -58,6 +61,8 @@ class TemporalSummaryTests(unittest.TestCase):
             write_reports(root, metrics, {}, 1)
             latex = (root / "results.tex").read_text()
             self.assertIn("4/9", latex)
+            self.assertIn("Chebyshev + labels found no feasible solution for ES.", latex)
+            self.assertIn("Ensemble + labels found no feasible solution for RU.", latex)
             self.assertIn("1 common countries", latex)
             self.assertIn(r"Table~\ref{tab:cenalert-matrix}", latex)
             self.assertNotIn("\r", latex)

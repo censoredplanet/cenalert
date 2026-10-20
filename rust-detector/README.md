@@ -764,7 +764,8 @@ Matplotlib installed:
 ```bash
 python3 scripts/summarize_temporal_results.py \
   --results /path/to/four-group-experiment \
-  --output /path/to/paper-results
+  --output /path/to/paper-results \
+  --pareto-countries TR OM
 ```
 
 The output contains `results.tex`, English and Chinese summaries, an evaluation
@@ -774,6 +775,8 @@ configurations. Training coverage is computed from the saved detection outputs
 and label snapshot. Pass `--evaluation-labels /path/to/labels.json` to recompute
 test coverage and attribution with updated labels. Training labels must remain
 unchanged. Upload the figure PDFs to `figures/` in the manuscript.
+The manuscript Pareto figure defaults to TR and OM in a single row;
+`--pareto-countries` selects other completed label-constrained ensemble runs.
 
 ### Review held-out notification candidates
 
@@ -810,6 +813,8 @@ retained anomalies with impact below one. `configuration-summary.csv` contains
 the common-country comparison. `available-configuration-summary.csv`,
 `detection-table.tex`, and `contextualization-table.tex` report each configuration's
 completed countries, with country counts and infeasible configurations marked in the tables.
+`combined-table.tex` combines raw detections and alerts, retaining training-label
+coverage and test-label coverage before and after contextualization.
 `low-calibration-countries.csv` lists countries with zero or one explained coalesced
 training anomaly and their test-period impact removals, including sparse removals.
 `low-impact-review.csv` traces each retained IF < 1 anomaly in the available-country
