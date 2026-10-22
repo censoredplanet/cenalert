@@ -17,6 +17,12 @@ from datetime import date
 
 
 class ContextualizationReviewTests(unittest.TestCase):
+    def test_high_severity_is_retained_using_frozen_training_boundary(self):
+        anomalies = [dict(impact=i) for i in [1, 3, 4, 5, 100]]
+        self.assertEqual(retain_by_impact(anomalies, 100, 4), anomalies[2:])
+        self.assertEqual(retain_by_impact(anomalies, None, 4), anomalies)
+        self.assertEqual(retain_by_impact(anomalies, 2, 4), anomalies[1:])
+
     def test_combined_table_preserves_coverage_and_configuration_failures(self):
         summary = {"labels_ensemble/knee": dict(variant="labels_ensemble", selection="knee",
                    countries=70, training_labels_covered=290, training_labels_total=290,

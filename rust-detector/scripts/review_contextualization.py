@@ -2,8 +2,10 @@
 import argparse
 import csv
 import json
+import math
 import subprocess
 import tempfile
+from statistics import median
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -47,10 +49,11 @@ def coverage(anomalies, labels, proximity):
     return [label for label in labels if any(matches(a, label, proximity) for a in anomalies)]
 
 
-def retain_by_impact(anomalies, threshold):
+def retain_by_impact(anomalies, threshold, high_impact_threshold=None):
     if threshold is None:
         return list(anomalies)
-    return [a for a in anomalies if a["impact"] >= threshold]
+    return [a for a in anomalies if a["impact"] >= threshold or
+            (high_impact_threshold is not None and a["impact"] >= high_impact_threshold)]
 
 
 def evaluation_labels(snapshot, replacement, cutoff):
@@ -147,6 +150,11 @@ def filter_output(binary, country, anomalies, labels_path, proximity, gap, direc
     coalesced = sorted(result["anomalies"] + [r["anomaly"] for r in result["discarded"]],
                        key=lambda a: a["start"])
     restore_null_scores(coalesced, anomalies)
+    expected = median(a["impact"] for a in coalesced) if coalesced else None
+    actual = result["stages"][0].get("high_impact_threshold")
+    if (expected is None) != (actual is None) or (expected is not None and
+            not math.isclose(expected, actual, rel_tol=1e-12, abs_tol=1e-12)):
+        raise ValueError("severity boundary disagrees with Rust filter; rebuild the binary")
     return coalesced, result["stages"][0].get("impact_threshold")
 
 
@@ -207,7 +215,9 @@ def low_impact_rows(countries, common):
                 variant=record["variant"], selection=record["selection"], country=record["country"],
                 in_common_countries=record["country"] in common, anomaly=anomaly,
                 threshold=record["threshold"],
-                reason="no_matched_training_anomaly" if record["threshold"] is None else "above_calibrated_threshold",
+                reason=("no_matched_training_anomaly" if record["threshold"] is None else
+                        "above_calibrated_threshold" if anomaly["impact"] >= record["threshold"] else
+                        "high_severity"),
                 matched_training_anomalies=record["calibration"]["matched_training_anomalies"],
                 threshold_sources=record["calibration"]["threshold_sources"]))
     return rows
@@ -386,7 +396,8 @@ def report_lines(analysis):
     lines = ["# Contextualization of held-out detections", "",
              f"{mode}. Impact thresholds use coalesced training anomalies matched to training labels. "
              "Training intervals crossing the cutoff are excluded from calibration. "
-             "Thresholds remain fixed during testing; countries without a calibration match retain all candidates. "
+             "The high-severity boundary is the median coalesced training impact; anomalies at or above it are retained. "
+             "Both thresholds remain fixed during testing; countries without a calibration match retain all candidates. "
              f"Sparse coalescing allows {analysis['sparse_gap_days']} intervening normal day(s). "
              "Cross-country grouping uses exact start dates and preserves each constituent anomaly.", "",
              "| Configuration | Rule | Countries | Raw | Coalesced | Impact retained | Alerts (≥5 countries) | Matched alerts | Country labels before → after | IF < 1 retained |",
@@ -535,7 +546,8 @@ def main():
                     evidence = calibration_evidence(calibrated, training_labels, country, proximity, threshold)
                     coalesced, _ = filter_output(binary, country, raw, training_path,
                                                  proximity, args.sparse_gap_days, scratch)
-                    retained = retain_by_impact(coalesced, threshold)
+                    high_impact_threshold = median(a["impact"] for a in calibrated) if calibrated else None
+                    retained = retain_by_impact(coalesced, threshold, high_impact_threshold)
                     raw_covered = coverage(raw, required, proximity)
                     recorded = next(s for s in result["selections"] if s["selection"] == selection)
                     assert len(raw) == recorded["anomaly_count"]
@@ -545,7 +557,8 @@ def main():
                     retained_covered = coverage(retained, required, proximity)
                     assert coverage(coalesced, required, proximity) == raw_covered
                     countries.append(dict(country=country, variant=variant, selection=selection,
-                        threshold=threshold, calibration=evidence, training_anomalies=len(training),
+                        threshold=threshold, high_impact_threshold=high_impact_threshold,
+                        calibration=evidence, training_anomalies=len(training),
                         coalesced_training_anomalies=len(calibrated),
                         training_labels_total=len(train_required),
                         training_labels_covered=len(coverage([a for a in all_anomalies if a["start"] <= cutoff], train_required, proximity)),
@@ -576,6 +589,7 @@ def main():
                     contextualization_binary=str(binary), country_proximity_days=proximity,
                     global_proximity_days=min(proximity, 1),
                     sparse_gap_days=args.sparse_gap_days, threshold_reference="training",
+                    severity_reference="median_coalesced_training_impact",
                     all_configurations=args.all_configurations, comparison_countries=common,
                     summary=summary, available_summary=available_summary, excluded=excluded,
                     countries=countries, ordering_cases=ordering, grouping=grouping,

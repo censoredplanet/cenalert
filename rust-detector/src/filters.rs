@@ -18,6 +18,7 @@ pub struct FilterApplication {
     pub retained: Vec<Anomaly>,
     pub discarded: Vec<Anomaly>,
     pub impact_threshold: Option<f64>,
+    pub high_impact_threshold: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -28,6 +29,8 @@ pub struct FilterStageSummary {
     pub discarded_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub impact_threshold: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high_impact_threshold: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -61,6 +64,7 @@ pub fn apply_anomaly_filters(
             retained_count: application.retained.len(),
             discarded_count: application.discarded.len(),
             impact_threshold: application.impact_threshold,
+            high_impact_threshold: application.high_impact_threshold,
         });
         discarded.extend(
             application
@@ -89,10 +93,26 @@ impl AnomalyFilter for MinimumLabeledImpactFilter {
     }
 
     fn rejection_reason(&self) -> &'static str {
-        "impact is below the lowest-impact labeled anomaly"
+        "impact is below both the lowest-impact labeled anomaly and the high-severity boundary"
     }
 
     fn apply(&self, anomalies: Vec<Anomaly>, context: &FilterContext<'_>) -> FilterApplication {
+        let mut impacts: Vec<_> = anomalies
+            .iter()
+            .map(|a| a.impact)
+            .filter(|impact| impact.is_finite())
+            .collect();
+        impacts.sort_by(f64::total_cmp);
+        let high_impact_threshold = if impacts.is_empty() {
+            None
+        } else {
+            let mid = impacts.len() / 2;
+            Some(if impacts.len() % 2 == 0 {
+                impacts[mid - 1] / 2.0 + impacts[mid] / 2.0
+            } else {
+                impacts[mid]
+            })
+        };
         let impact_threshold = anomalies
             .iter()
             .filter(|anomaly| {
@@ -113,15 +133,18 @@ impl AnomalyFilter for MinimumLabeledImpactFilter {
                 retained: anomalies,
                 discarded: Vec::new(),
                 impact_threshold: None,
+                high_impact_threshold,
             };
         };
-        let (retained, discarded) = anomalies
-            .into_iter()
-            .partition(|anomaly| anomaly.impact >= threshold);
+        let (retained, discarded) = anomalies.into_iter().partition(|anomaly| {
+            anomaly.impact >= threshold
+                || high_impact_threshold.is_some_and(|high| anomaly.impact >= high)
+        });
         FilterApplication {
             retained,
             discarded,
             impact_threshold: Some(threshold),
+            high_impact_threshold,
         }
     }
 }
@@ -156,6 +179,68 @@ mod tests {
         );
         label.country_code = Some(country.to_owned());
         label
+    }
+
+    #[test]
+    fn preserves_high_impact_anomalies_below_the_labeled_minimum() {
+        let labels = vec![label("RU", "2024-04-01")];
+        let context = FilterContext {
+            labels: &labels,
+            country_code: "RU",
+            proximity_days: 0,
+        };
+        let result = MinimumLabeledImpactFilter.apply(
+            vec![
+                anomaly("2024-01-01", 1.0),
+                anomaly("2024-02-01", 3.0),
+                anomaly("2024-03-01", 5.0),
+                anomaly("2024-04-01", 100.0),
+            ],
+            &context,
+        );
+        assert_eq!(result.impact_threshold, Some(100.0));
+        assert_eq!(result.high_impact_threshold, Some(4.0));
+        assert_eq!(
+            result.retained.iter().map(|a| a.impact).collect::<Vec<_>>(),
+            vec![5.0, 100.0]
+        );
+    }
+
+    #[test]
+    fn retains_ties_at_the_severity_boundary() {
+        let labels = vec![label("RU", "2024-04-01")];
+        let context = FilterContext {
+            labels: &labels,
+            country_code: "RU",
+            proximity_days: 0,
+        };
+        let result = MinimumLabeledImpactFilter.apply(
+            vec![
+                anomaly("2024-01-01", 1.0),
+                anomaly("2024-02-01", 5.0),
+                anomaly("2024-03-01", 5.0),
+                anomaly("2024-04-01", 100.0),
+            ],
+            &context,
+        );
+        assert_eq!(result.high_impact_threshold, Some(5.0));
+        assert_eq!(result.retained.len(), 3);
+    }
+
+    #[test]
+    fn severity_boundary_handles_empty_and_singleton_inputs() {
+        let labels = vec![label("RU", "2024-01-01")];
+        let context = FilterContext {
+            labels: &labels,
+            country_code: "RU",
+            proximity_days: 0,
+        };
+        let empty = MinimumLabeledImpactFilter.apply(Vec::new(), &context);
+        assert_eq!(empty.high_impact_threshold, None);
+        assert_eq!(empty.impact_threshold, None);
+        let single = MinimumLabeledImpactFilter.apply(vec![anomaly("2024-01-01", 10.0)], &context);
+        assert_eq!(single.high_impact_threshold, Some(10.0));
+        assert_eq!(single.retained.len(), 1);
     }
 
     #[test]

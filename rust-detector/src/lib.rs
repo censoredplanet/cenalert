@@ -12,6 +12,7 @@ pub mod model;
 pub mod notifications;
 pub mod selection;
 mod statistics;
+pub mod stitching;
 pub mod tuning;
 mod window;
 

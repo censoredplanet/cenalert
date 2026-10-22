@@ -25,6 +25,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Rebuild a historical suffix from archived sample windows.
+    RebuildSeries(RebuildArgs),
     /// Detect anomalies using a selected parameter set.
     Detect(DetectArgs),
     /// Tune detector parameters with NSGA-II.
@@ -35,6 +37,60 @@ enum Command {
     Filter(FilterArgs),
     /// Analyze same-day candidates and group broad cross-country occurrences.
     GroupCrossCountry(GroupCrossCountryArgs),
+}
+
+#[derive(Debug, Args)]
+struct RebuildArgs {
+    #[arg(long)]
+    samples: PathBuf,
+    #[arg(long)]
+    baseline: PathBuf,
+    #[arg(long)]
+    replace_from: chrono::NaiveDate,
+    #[arg(long)]
+    through_date: chrono::NaiveDate,
+    #[arg(long)]
+    as_of: chrono::NaiveDate,
+    /// Minimum observation age; choose explicitly for this reconstruction.
+    #[arg(long)]
+    settling_days: u32,
+    #[arg(long, default_value_t = 45)]
+    sample_count: usize,
+    #[arg(long, default_value_t = 10)]
+    minimum_overlap: usize,
+    /// Enable experimental weekly calibration with at least this many pairs (>= 3).
+    #[arg(long)]
+    coarse_minimum_overlap: Option<usize>,
+    /// New JSON file containing the series and per-window diagnostics.
+    #[arg(long)]
+    output: PathBuf,
+}
+
+fn run_rebuild(args: RebuildArgs) -> Result<(), Box<dyn Error>> {
+    use cenalert_detector::stitching::{rebuild_series, RebuildConfig, SampleArchive};
+    let archive: SampleArchive = serde_json::from_reader(File::open(args.samples)?)?;
+    let baseline = parse_dashboard_json(File::open(args.baseline)?)?;
+    let result = rebuild_series(
+        &archive,
+        &baseline,
+        RebuildConfig {
+            replace_from: args.replace_from,
+            through_date: args.through_date,
+            as_of: args.as_of,
+            settling_days: args.settling_days,
+            sample_count: args.sample_count,
+            minimum_overlap: args.minimum_overlap,
+            minimum_coarse_overlap: args.coarse_minimum_overlap,
+        },
+    )?;
+    let output = File::create_new(args.output)?;
+    serde_json::to_writer_pretty(BufWriter::new(output), &result)?;
+    eprintln!(
+        "{}: {} unresolved dates",
+        result.country,
+        result.unresolved_dates.len()
+    );
+    Ok(())
 }
 
 #[derive(Debug, Args)]
@@ -197,6 +253,7 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     match cli.command {
+        Command::RebuildSeries(arguments) => run_rebuild(arguments),
         Command::Detect(arguments) => run_detection(arguments),
         Command::Tune(arguments) => run_tuning(arguments),
         Command::Select(arguments) => run_selection(arguments),

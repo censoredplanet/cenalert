@@ -153,10 +153,18 @@ path.
 
 The `filter` subcommand applies composable post-detection filters. Its first
 filter derives a per-country impact threshold from the lowest-impact anomaly
-that matches an applicable label. It retains anomalies at or above that
-threshold and records discarded anomalies with the filter decision. When none
+that matches an applicable label. Anomalies are retained if their impact meets
+that threshold or the high-severity boundary (the median impact of the supplied
+anomalies, after coalescing). Ties at the boundary are retained. Both boundaries
+are recorded in the filter stage. When none
 of the country's detected anomalies matches a label, the threshold is
 unavailable and all anomalies are retained.
+
+For held-out evaluation, `scripts/review_contextualization.py` derives both
+boundaries from coalesced training anomalies and holds them fixed during testing.
+`scripts/review_event_outcomes.py --contextualization /path/to/analysis.json
+--results /path/to/results --output /path/to/event-review` reports event-level
+coverage and impact quantiles from saved detections.
 
 ```bash
 cargo run --release -- \
@@ -930,6 +938,43 @@ Together, the three subcommands provide this local workflow:
 ```text
 Dashboard JSON -> tune -> Pareto front -> select -> parameters -> detect
 ```
+
+## Rebuild archived sample windows
+
+`rebuild-series` reconstructs a historical suffix for data-quality experiments.
+Prepare the latest complete batch of 45 samples for each monthly window, then
+rebuild against an unchanged baseline prefix:
+
+```bash
+python3 scripts/prepare_sample_archive.py \
+  --raw-directory /path/to/daily_samples --country PK --as-of 2026-10-14 \
+  --output /path/to/PK-samples.json
+target/release/cenalert-detector rebuild-series \
+  --samples /path/to/PK-samples.json --baseline /path/to/PK.json \
+  --replace-from 2025-09-13 --through-date 2026-08-31 --as-of 2026-10-14 \
+  --settling-days 28 --output /path/to/PK-rebuilt.json
+```
+
+Choose `--settling-days` explicitly; 28 above is an experimental observation-age
+cutoff. The combiner uses dates present in every sample and retains the existing
+any-zero aggregation rule. Later batches can revise historical values. Scaling
+uses the median ratio of positive overlapping observations, requiring at least
+`--minimum-overlap` pairs (default 10).
+
+For sparse intervals, `--coarse-minimum-overlap 3` enables experimental weekly
+calibration. The adapter includes complete coarse samples from the same batch.
+Calibration links full-week raw daily means to weekly observations, then links
+the weekly series to the accumulated historical scale. Daily-overlap scaling
+takes precedence. Both weekly links require the requested number of positive
+pairs (at least three). This assumes weekly observations are proportional to
+full-week daily means; check sensitivity to the minimum overlap before adopting
+the reconstructed series. Intervals lacking calibration remain unresolved.
+
+The output contains per-window scaling diagnostics, `unresolved_dates`, and a
+`series` array when the entire requested interval is reconstructed. Extract that
+array to use it with `detect`. Both commands require new output paths. Keep raw
+samples and reconstruction outputs outside Git. This experimental command runs
+independently of the daily pipeline.
 
 ## Tests
 
