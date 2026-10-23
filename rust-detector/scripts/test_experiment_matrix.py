@@ -54,6 +54,18 @@ class ExperimentTests(unittest.TestCase):
                 self.assertEqual(command[command.index("--seed") + 1],
                                  str(batch.country_seed(42, "RU")))
 
+    def test_selected_variants_are_snapshotted(self):
+        self.add_series()
+        self.args.variants = ["labels", "labels_ensemble"]
+        matrix.prepare_inputs(self.args)
+        manifest = json.loads((self.args.output_directory / "experiment.json").read_text())
+        self.assertEqual(set(manifest["variants"]), {"labels", "labels_ensemble"})
+        self.args.resume = True
+        matrix.prepare_inputs(self.args)
+        self.args.variants = ["labels"]
+        with self.assertRaisesRegex(ValueError, "settings changed"):
+            matrix.prepare_inputs(self.args)
+
     def test_resume_rejects_changed_settings_labels_and_series(self):
         self.add_series()
         matrix.prepare_inputs(self.args)

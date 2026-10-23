@@ -45,6 +45,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--rust-binary", required=True, type=Path)
     parser.add_argument("--output-directory", required=True, type=Path)
     parser.add_argument("--countries", nargs="+")
+    parser.add_argument("--variants", nargs="+", choices=list(VARIANTS),
+                        default=list(VARIANTS), help="Configurations to evaluate.")
     parser.add_argument("--seeds", type=int, nargs="+", default=[42])
     parser.add_argument("--evaluations", type=int, default=5000)
     parser.add_argument("--population-size", type=int, default=100)
@@ -104,7 +106,8 @@ def prepare_inputs(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]
         "evaluations": args.evaluations, "population_size": args.population_size,
         "proximity_days": args.proximity_days,
         "threads_per_tuning": args.threads_per_tuning,
-        "selections": args.selections, "variants": VARIANTS,
+        "selections": args.selections, "variants": {
+            key: VARIANTS[key] for key in getattr(args, "variants", VARIANTS)},
         "k_min": 5.0, "k_max": 18.0,
         "initial_population_seeded": False,
         "efficiency_bounds": {"chebyshev": [0.01, 0.1], "ensemble": [0.05, 0.1]},
@@ -427,7 +430,7 @@ def main() -> None:
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         jobs = [executor.submit(run_variant, replace(config, seed=seed), country, variant,
                                 details[country], args.selections, args.resume)
-                for seed in args.seeds for country in countries for variant in VARIANTS]
+                for seed in args.seeds for country in countries for variant in args.variants]
         for future in as_completed(jobs):
             result = future.result()
             results.append(result)
