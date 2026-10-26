@@ -13,7 +13,7 @@ from pathlib import Path
 from statistics import mean, median
 
 from batch_ensemble_tuning import label_applies, required_labels
-from review_contextualization import coverage, filter_output, matches, read, write
+from review_contextualization import coverage, filter_output, grouping_key, matches, read, write
 from review_event_outcomes import quantile
 from review_member_contributions import analyze as accepted_member_analysis
 
@@ -31,6 +31,7 @@ RESTRICTION_EVENTS = {
     ('TR','2025-03-19'), ('TR','2025-09-08'), ('TR','2026-04-15'),
     ('VE','2025-01-08'), ('VN','2025-05-25'),
 }
+OTHER_EVENTS = {('KZ', '2026-08-13')}  # Recorded as a Telegram outage.
 
 
 def member_parameters(parameters, member, training_maximum, series_maximum):
@@ -77,6 +78,8 @@ def label_kind(label):
     category = label.get('metadata', {}).get('category')
     text = event_text(label).lower()
     if label['scope'] == 'global' or category in ('other', 'vpn_discussion'):
+        return 'other_explained'
+    if (label.get('country_code'), label.get('date')) in OTHER_EVENTS:
         return 'other_explained'
     if 'reaction to us tiktok ban' in text or 'restrictions never materialized' in text:
         return 'other_explained'
@@ -167,7 +170,9 @@ class Analysis:
                 applicable = [l for l in self.labels if first <= l['date'] <= last and label_applies(l, country)]
                 saved_period = [a for a in saved['anomalies'] if first <= a['start'] <= last]
                 ensemble_labels = coverage(saved_period, required, self.proximity)
-                for mode, anomalies in [('standalone_shared_parameters', independent), ('rejected_single_vote', rejected)]:
+                for mode, anomalies in [('standalone_shared_parameters', independent),
+                                        ('standalone_dense', [a for a in independent if not a.get('sparse', False)]),
+                                        ('rejected_single_vote', rejected)]:
                     selected = [a for a in anomalies if first <= a['start'] <= last]
                     covered = coverage(selected, required, self.proximity)
                     additional = [l for l in covered if l not in ensemble_labels]
@@ -228,7 +233,7 @@ class Analysis:
                                 removed += 1; sparse_removed += a.get('sparse', False)
                         retained_labels += len(covered)
                     if fraction == 1:
-                        expected = self.context['summary'][f'{variant}/{selection}']
+                        expected = self.context.get('available_summary', self.context['summary'])[f'{variant}/{selection}']
                         assert retained == expected['retained'] and retained_labels == expected['retained_covered']
                     if fraction == 0:
                         assert removed == 0 and calibrated == 0
@@ -253,7 +258,7 @@ class Analysis:
         summaries, details = [], []
         for key, grouping in self.context['available_grouping'].items():
             variant, selection = key.split('/')
-            g = grouping['5']; counts = Counter(); levels = Counter()
+            g = grouping[grouping_key(self.context)]; counts = Counter(); levels = Counter()
             entries = [(a['start'], [a], annotated['labels']) for a, annotated in zip(
                 g['individual_notifications'],g['label_matching']['individuals'],strict=True)]
             entries += [(a['date'],a['anomalies'],[l for m in annotated['members'] for l in m['labels']])
@@ -296,11 +301,12 @@ class Analysis:
                 for r in selected:
                     anomalies=read(self.folder(r['country'],variant)/f'{selection}-detection.json')['anomalies']
                     training_count+=sum(a['start']<=self.cutoff for a in anomalies)
-                summary=self.context['summary'][f'{variant}/{selection}']
+                summary=self.context.get('available_summary', self.context['summary'])[f'{variant}/{selection}']
                 result.append(dict(configuration=variant,selection=selection,training_anomalies=training_count,
+                    countries=len(selected), test_labels_total=summary['labels_total'],
                     training_labels_covered=summary['training_labels_covered'],training_labels_total=summary['training_labels_total'],
                     test_anomalies=summary['raw'],test_labels_covered=summary['raw_covered'],
-                    notifications=summary['notifications']['5'],retained_labels=summary['retained_covered']))
+                    notifications=summary['notifications'][grouping_key(self.context)],retained_labels=summary['retained_covered']))
         for row in self.context['countries']:
             for label in row['lost_labels']:
                 matched=[a for a in row['coalesced_anomalies'] if matches(a,label,self.proximity)]
@@ -332,7 +338,7 @@ def markdown(result):
     one=next(r for r in result['sampling']['summary'] if r['configuration']=='labels_ensemble'
              and r['selection']=='knee' and r['mode']=='one_explained_per_country')
     lines=['# Results analysis', '',
-        '71 countries; training through 2024, testing January 2025–August 2026. '
+        'Training through 2024, testing January 2025–August 2026. '
         'Analyses use the saved parameter sets and final labels. Detailed results for all configurations '
         'and sampling repetitions are in `analysis.json`; event-level records are in `event-review.csv`.', '',
         '## Main observations', '',
@@ -347,7 +353,7 @@ def markdown(result):
         '| Configuration | Selection | Training anomalies | Train labels | Test anomalies | Test labels | Notifications | Retained labels |',
         '|---|---|---:|---:|---:|---:|---:|---:|']
     for r in result['comparisons']:
-        lines.append(f"| {r['configuration']} | {r['selection']} | {r['training_anomalies']} | {r['training_labels_covered']}/{r['training_labels_total']} | {r['test_anomalies']} | {r['test_labels_covered']}/61 | {r['notifications']} | {r['retained_labels']}/61 |")
+        lines.append(f"| {r['configuration']} | {r['selection']} | {r['training_anomalies']} | {r['training_labels_covered']}/{r['training_labels_total']} | {r['test_anomalies']} | {r['test_labels_covered']}/{r['test_labels_total']} | {r['notifications']} | {r['retained_labels']}/{r['test_labels_total']} |")
     extra=[r for r in result.get('event_differences',[]) if r['analysis']=='selection_difference'
            and r['configuration']=='labels_ensemble' and r['stage']=='retained_anomalies']
     if extra:
@@ -413,6 +419,22 @@ def markdown(result):
     return '\n'.join(lines)+'\n'
 
 
+def verify_member_balance(member_results):
+    rows = []
+    for result in member_results:
+        counts = [r for r in result['summary'] if r['period'] == 'training'
+                  and r['mode'] == 'standalone_dense']
+        if len(counts) != 3:
+            raise ValueError('Expected three independent dense member counts')
+        values = [r['anomalies'] for r in counts]
+        excess = max(0, 2 * max(values) - sum(values))
+        first = counts[0]
+        rows.append(dict(country=first['country'], configuration=first['configuration'],
+            selection=first['selection'], counts=dict(zip(MEMBERS, values)),
+            excess=excess))
+    return rows
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--results',type=Path,required=True)
@@ -458,6 +480,9 @@ def main():
         comparisons=comparisons,members=aggregate_members(member_results),
         accepted_member_votes=accepted_counts, accepted_label_votes=accepted_labels,
         notifications=notifications,sampling=sampling,event_differences=comparison_events)
+    if analysis.config.get('ensemble_member_balance'):
+        result['member_balance'] = verify_member_balance(member_results)
+        assert all(r['excess'] == 0 for r in result['member_balance']), 'Saved member counts violate balance'
     write(analysis.root/'analysis.json',result)
     (analysis.root/'analysis.md').write_text(markdown(result))
     fields=list(dict.fromkeys(k for r in events for k in r))

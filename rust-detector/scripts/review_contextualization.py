@@ -16,6 +16,10 @@ NAMES = {"original": "Single detector", "labels": "Single detector + labels",
          "ensemble": "Ensemble", "labels_ensemble": "Ensemble + labels", "fixed_3sigma": "Fixed 3σ"}
 
 
+def grouping_key(record):
+    return str(record.get("minimum_group_countries", 5))
+
+
 def read(path):
     return json.loads(path.read_text())
 
@@ -173,12 +177,12 @@ def ordering_cases(anomalies, labels, country, proximity):
     return cases
 
 
-def aggregate_rows(rows, binary, labels_by_country, proximity, scratch):
+def aggregate_rows(rows, binary, labels_by_country, proximity, scratch, minimum_countries=5):
     candidates = [dict(country=r["country"], **a) for r in rows for a in r["retained_anomalies"]]
     source = scratch / "candidates.json"
     write(source, transport_scores(candidates))
     grouping = {}
-    for minimum in [4, 5]:
+    for minimum in sorted({4, 5, 6, minimum_countries}):
         destination = scratch / "grouped.json"
         subprocess.run([str(binary), "group-cross-country", "--input", str(source),
                         "--output", str(destination), "--minimum-countries", str(minimum)],
@@ -192,7 +196,8 @@ def aggregate_rows(rows, binary, labels_by_country, proximity, scratch):
     summary = {key: sum(r[key] for r in rows) for key in
                ["raw", "raw_sparse", "coalesced", "retained", "training_labels_total", "training_labels_covered", "labels_total",
                 "raw_covered", "retained_covered"]}
-    summary.update(countries=len(rows), variant=rows[0]["variant"] if rows else None,
+    summary.update(minimum_group_countries=minimum_countries,
+                   countries=len(rows), variant=rows[0]["variant"] if rows else None,
                    selection=rows[0]["selection"] if rows else None,
                    low_impact_retained=sum(a["impact"] < 1 for a in candidates),
                    without_calibration=[r["country"] for r in rows if r["threshold"] is None])
@@ -225,7 +230,7 @@ def low_impact_rows(countries, common):
 
 def write_low_impact_review(path, analysis):
     key = "labels_ensemble/knee" if analysis["all_configurations"] else "knee"
-    matching = analysis["available_grouping"][key]["5"]["label_matching"]
+    matching = analysis["available_grouping"][key][grouping_key(analysis)]["label_matching"]
     annotations = matching["individuals"] + [a for g in matching["groups"] for a in g["members"]]
     labels = {(a["country"], a["start"]): a["labels"] for a in annotations}
     fields = ["country", "start", "end", "impact", "sparse", "impact_threshold", "reason",
@@ -284,7 +289,7 @@ def write_combined_table(path, summary, excluded=()):
         if s["variant"] in failed:
             name += r"$^{*}$"
         rule = {"knee": "K", "leftmost": "L", "fixed": "--"}[s["selection"]]
-        match = s["notification_matching"]["5"]
+        match = s["notification_matching"][grouping_key(s)]
         lines.append(f"{name} & {rule} & {s['countries']} & "
                      f"{s['training_labels_covered']}/{s['training_labels_total']} & "
                      f"{s['raw']} & {match['total']} & {match['matched']} & "
@@ -306,7 +311,7 @@ def write_paper_table(path, summary, excluded=()):
         if previous_selection is not None and s["selection"] != previous_selection:
             lines.append(r"\midrule")
         previous_selection = s["selection"]
-        m = s["notification_matching"]["5"]
+        m = s["notification_matching"][grouping_key(s)]
         name = NAMES[s["variant"]].replace("Fixed 3σ", r"Fixed $3\sigma$")
         if s["variant"] in failed:
             name += r"$^{*}$"
@@ -381,7 +386,7 @@ def write_configuration_summary(path, summary):
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for s in summary.values():
-            m = s["notification_matching"]["5"]
+            m = s["notification_matching"][grouping_key(s)]
             writer.writerow(dict(configuration=s["variant"], selection=s["selection"], countries=s["countries"],
                 raw_anomalies=s["raw"], coalesced_anomalies=s["coalesced"], impact_retained=s["retained"],
                 notifications=m["total"], matched_notifications=m["matched"],
@@ -400,16 +405,16 @@ def report_lines(analysis):
              "Both thresholds remain fixed during testing; countries without a calibration match retain all candidates. "
              f"Sparse coalescing allows {analysis['sparse_gap_days']} intervening normal day(s). "
              "Cross-country grouping uses exact start dates and preserves each constituent anomaly.", "",
-             "| Configuration | Rule | Countries | Raw | Coalesced | Impact retained | Alerts (≥5 countries) | Matched alerts | Country labels before → after | IF < 1 retained |",
+             f"| Configuration | Rule | Countries | Raw | Coalesced | Impact retained | Alerts (≥{grouping_key(analysis)} countries) | Matched alerts | Country labels before → after | IF < 1 retained |",
              "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |"]
     for s in analysis["summary"].values():
-        m = s["notification_matching"]["5"]
+        m = s["notification_matching"][grouping_key(s)]
         lines.append(f"| {NAMES[s['variant']]} | {s['selection']} | {s['countries']} | {s['raw']} | "
                      f"{s['coalesced']} | {s['retained']} | {m['total']} | {m['matched']} | "
                      f"{s['raw_covered']}/{s['labels_total']} → {s['retained_covered']}/{s['labels_total']} | "
                      f"{s['low_impact_retained']} |")
     lines += ["", "A notification is matched if any constituent matches a country or global label. "
-              "The JSON also reports groups with every constituent matched and grouping at four countries.", "",
+              "The JSON also reports groups with every constituent matched.", "",
               "Country matching uses the configured window; global matching is capped at ±1 day.", "",
               "## Countries with zero or one explained training anomaly", "",
               "Counts refer to coalesced training anomalies matching country or global labels. "
@@ -452,7 +457,7 @@ def report_lines(analysis):
     lines += ["", "## Available-country ensemble result", ""]
     key = "labels_ensemble/knee" if analysis["all_configurations"] else "knee"
     s = analysis["available_summary"][key]
-    m = s["notification_matching"]["5"]
+    m = s["notification_matching"][grouping_key(s)]
     lines.append(f"Across {s['countries']} available countries: {s['raw']} raw anomalies, "
                  f"{s['coalesced']} coalesced, {s['retained']} impact-retained, "
                  f"{m['total']} notifications, {m['matched']} label-matched. "
@@ -466,7 +471,7 @@ def report_lines(analysis):
     lines += ["", "analysis.json includes the configuration comparisons, per-country calibration evidence, "
               "low-impact retained anomalies, lost labels, and notification groups. "
               "unmatched-notifications.csv uses all available label-constrained ensemble countries with "
-              "knee/fallback selection and five-country grouping. Rows sharing a notification_id belong "
+              f"knee/fallback selection and {grouping_key(analysis)}-country grouping. Rows sharing a notification_id belong "
               "to one cross-country notification."]
     return lines
 
@@ -476,6 +481,7 @@ def main():
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sparse-gap-days", type=int, default=1)
+    parser.add_argument("--minimum-group-countries", type=int, default=4)
     parser.add_argument("--evaluation-labels", type=Path,
                         help="updated labels for test-period attribution; training labels must be unchanged")
     parser.add_argument("--all-configurations", action="store_true",
@@ -486,6 +492,8 @@ def main():
     args = parser.parse_args()
     if args.sparse_gap_days < 0:
         parser.error("sparse gap must be non-negative")
+    if args.minimum_group_countries < 2:
+        parser.error("minimum group size must be at least two countries")
     root = args.results.resolve()
     config = read(root / "experiment.json")
     if len(config["seeds"]) != 1:
@@ -578,14 +586,15 @@ def main():
                 rows = [r for r in countries if r["variant"] == variant and r["selection"] == selection]
                 name = key(variant, selection)
                 available_summary[name], available_grouping[name] = aggregate_rows(
-                    rows, binary, labels_by_country, proximity, scratch)
+                    rows, binary, labels_by_country, proximity, scratch, args.minimum_group_countries)
                 selected = [r for r in rows if r["country"] in common]
                 if len(selected) == len(rows):
                     summary[name], grouping[name] = available_summary[name], available_grouping[name]
                 else:
                     summary[name], grouping[name] = aggregate_rows(
-                        selected, binary, labels_by_country, proximity, scratch)
+                        selected, binary, labels_by_country, proximity, scratch, args.minimum_group_countries)
     analysis = dict(source=str(root), train_end=cutoff, test_end=end, seed=seed,
+                    minimum_group_countries=args.minimum_group_countries,
                     contextualization_binary=str(binary), country_proximity_days=proximity,
                     global_proximity_days=min(proximity, 1),
                     sparse_gap_days=args.sparse_gap_days, threshold_reference="training",
@@ -597,7 +606,7 @@ def main():
                     low_impact_retained=low_impact_rows(countries, common))
     write(args.output / "analysis.json", analysis)
     write_unmatched_notifications(args.output / "unmatched-notifications.csv",
-                                  available_grouping[key("labels_ensemble", "knee")]["5"])
+                                  available_grouping[key("labels_ensemble", "knee")][grouping_key(analysis)])
     write_low_impact_review(args.output / "low-impact-review.csv", analysis)
     write_calibration_review(args.output / "low-calibration-countries.csv", countries)
     if args.all_configurations:

@@ -1,9 +1,16 @@
-"""Tests of fixed-parameter ablation and label-sampling analysis."""
+"""Regression tests for event coverage, label sampling, and notification counts."""
 import unittest
 
 from analyze_paper_results import (
     Analysis, kept, label_kind, member_parameters, rejected_episodes, sampling_threshold, severity,
+    verify_member_balance,
 )
+from analyze_event_coverage import ensemble_only, calibration_changes
+from analyze_notification_outcomes import (
+    calibration_probability, label_status, month_range, region_months, grouping_sensitivity,
+)
+from prepare_paper_figures import group_summary, matched_notifications, same_day_groups
+from review_contextualization import grouping_key
 
 
 class PaperAnalysisTests(unittest.TestCase):
@@ -43,6 +50,8 @@ class PaperAnalysisTests(unittest.TestCase):
         self.assertEqual(label_kind(dict(scope='global',description='World Cup')),'other_explained')
         self.assertEqual(label_kind(dict(scope='country',description='Reaction to US TikTok ban')),'other_explained')
         self.assertEqual(label_kind(dict(scope='country',description='Telegram',metadata={'category':'filtering'})), 'restriction_related')
+        self.assertEqual(label_kind(dict(scope='country', country_code='KZ', date='2026-08-13',
+            description='Telegram outage', metadata={'category':'additional'})), 'other_explained')
 
     def test_subsampling_full_and_empty_sets_reconcile(self):
         a=Analysis.__new__(Analysis)
@@ -63,5 +72,126 @@ class PaperAnalysisTests(unittest.TestCase):
         self.assertEqual(full['filtered']['mean'],1)
         self.assertEqual(full['test_labels_retained']['mean'],0)
 
+    def test_balance_audit_counts_dense_intervals_only(self):
+        rows = [dict(country='RU',configuration='labels_ensemble',selection='knee',
+                     period='training', mode='standalone_dense',anomalies=n) for n in (2,5,3)]
+        rows.append(dict(period='test',mode='standalone_dense',anomalies=100))
+        result=verify_member_balance([dict(summary=rows)])
+        self.assertEqual(result[0]['excess'],0)
+        rows[1]['anomalies']=6
+        self.assertEqual(verify_member_balance([dict(summary=rows)])[0]['excess'],1)
 
-if __name__=='__main__':unittest.main()
+
+class NotificationAnalysisTests(unittest.TestCase):
+    def test_calibration_counts_labels_once(self):
+        reference = dict(applicable_labels=[1, 2, 3, 4],
+                         references=[dict(labels=[1, 2]), dict(labels=[1])])
+        self.assertEqual(calibration_probability(reference), .5)
+        self.assertEqual(calibration_probability(dict(applicable_labels=[], references=[])), 0)
+
+    def test_detected_filtered_and_retained(self):
+        label = dict(scope='country', country_code='RU', date='2025-01-05')
+        row = dict(raw_anomalies=[dict(start='2025-01-02')], retained_anomalies=[])
+        self.assertEqual(label_status(row, label, 3), 'filtered')
+        row['retained_anomalies'] = [dict(start='2025-01-01', component_starts=['2025-01-02'])]
+        self.assertEqual(label_status(row, label, 3), 'retained')
+        label['date'] = '2025-01-06'
+        self.assertEqual(label_status(row, label, 3), 'not_detected')
+
+    def test_region_group_is_counted_once_per_region(self):
+        rows = region_months([dict(date='2025-01-01', country='IN;PK;RU')], ['2025-01','2025-02'])
+        indexed = {(r['region'], r['month']):r['notifications'] for r in rows}
+        self.assertEqual(indexed['APAC','2025-01'], 1)
+        self.assertEqual(indexed['EECA','2025-01'], 1)
+        self.assertEqual(indexed['APAC','2025-02'], 0)
+        self.assertEqual(len(rows), 12)
+
+    def test_twenty_month_evaluation(self):
+        months = month_range('2025-01-01','2026-08-31')
+        self.assertEqual(len(months), 20)
+        self.assertEqual(months[-1], '2026-08')
+
+    def test_grouping_evidence_counts_distinct_countries(self):
+        label=dict(scope='global',date='2025-01-01',description='Outage')
+        grouping=dict(grouped_notifications=[dict(date='2025-01-01',countries=['RU','UA'],anomalies=[{},{}])],
+                      label_matching=dict(total=1,matched=1,groups=[dict(members=[
+                          dict(country='RU',labels=[label,label]),dict(country='UA',labels=[label])])]))
+        result=grouping_sensitivity(dict(available_grouping={'labels_ensemble/knee':{'5':grouping}}))
+        self.assertEqual(result[0]['groups'][0]['global_matches'][0]['countries'],['RU','UA'])
+
+    def test_grouping_selection_and_legacy_records(self):
+        self.assertEqual(grouping_key({}), '5')
+        self.assertEqual(grouping_key({'minimum_group_countries':4}), '4')
+
+    def test_member_vote_is_distinct_from_independently_tuned_baseline(self):
+        vote = {k:dict(voted=v) for k,v in
+                [('chebyshev',False),('isolation_forest',True),('lof',True)]}
+        anomaly = dict(start='2025-01-02',end='2025-01-02',impact=2,ensemble_vote=vote)
+        context = dict(country_proximity_days=3, countries=[
+            dict(country='AA',variant=v,selection='knee',raw_anomalies=a)
+            for v,a in [('original',[anomaly]),('labels',[]),('labels_ensemble',[anomaly])]])
+        labels = [dict(scope='country',country_code='AA',date='2025-01-01',description='Event'),
+                  dict(scope='global',date='2025-01-01',description='Global event')]
+        result = ensemble_only(context,labels,'2025-01-01','2025-12-31')
+        self.assertEqual(result['intervals'],1)
+        self.assertEqual(result['matched_intervals'],1)
+        self.assertEqual(result['country_labels'],1)
+        self.assertEqual(result['missed_by_original'],0)
+        self.assertEqual(result['missed_by_labeled_single'],1)
+
+    def test_calibration_counts_detected_anomalies(self):
+        def context(n):
+            return dict(countries=[dict(country='AA',variant='labels_ensemble',selection='knee',
+                                       calibration=dict(matched_training_anomalies=n))])
+        self.assertEqual(calibration_changes(context(1),context(0))[0]['after'],0)
+        self.assertEqual(calibration_changes(context(2),context(3)),[])
+
+    def test_distinct_countries_and_exact_date_vs_window(self):
+        records = [dict(country=c, retained_anomalies=[dict(start='2025-01-01')]*n)
+                   for c, n in [('AA', 2), ('BB', 1), ('CC', 1)]]
+        label = dict(country_code='AA', scope='country', date='2025-01-03',
+                     description='Blocking', metadata={'category':'filtering'})
+        rows = same_day_groups(records, [label], 3)
+        self.assertEqual(rows[0]['country_count'], 3)
+        self.assertEqual(rows[0]['same_day_restriction_countries'], '')
+        self.assertEqual(rows[0]['window_matched_restriction_countries'], 'AA')
+        self.assertEqual(group_summary(rows)['largest_window_matched_restriction_group'], 3)
+        self.assertEqual(group_summary(rows)['largest_same_day_restriction_group'], 0)
+        label['date'] = '2025-01-01'
+        self.assertEqual(same_day_groups(records, [label], 3)[0]['same_day_restriction_countries'], 'AA')
+
+    def test_group_membership_and_coalesced_starts(self):
+        records = [dict(country='AA', retained_anomalies=[dict(start='2025-01-01',
+                                     component_starts=['2025-01-01','2025-01-04'])])]
+        label = dict(country_code='BB', scope='country', date='2025-01-07',
+                     description='Blocking', metadata={'category':'filtering'})
+        self.assertEqual(same_day_groups(records, [label], 3)[0]['window_matched_restriction_events'], '')
+        label['country_code'] = 'AA'
+        row = same_day_groups(records, [label], 3)[0]
+        self.assertEqual(row['window_matched_restriction_countries'], 'AA')
+        self.assertEqual(row['same_day_restriction_countries'], '')
+
+    def test_unmatched_and_global_events_do_not_imply_restrictions(self):
+        records = [dict(country='AA', retained_anomalies=[dict(start='2025-01-01')])]
+        labels = [dict(scope='global', date='2025-01-01', description='World Cup')]
+        summary = group_summary(same_day_groups(records, labels, 3))
+        self.assertEqual(summary['largest_same_day_restriction_group'], 0)
+        self.assertEqual(group_summary([])['multi_country_dates'], 0)
+
+    def test_group_is_one_matched_notification(self):
+        label = dict(scope='global', date='2025-01-01', description='World Cup')
+        group = dict(date='2025-01-01', anomalies=[dict(country='AA'),dict(country='BB')])
+        grouping = dict(individual_notifications=[], grouped_notifications=[group],
+            label_matching=dict(individuals=[], matched=1, groups=[dict(members=[
+                dict(country='AA',labels=[label]),dict(country='BB',labels=[label])])]))
+        context = dict(available_grouping={'labels_ensemble/knee': {'5':grouping}})
+        events = [dict(analysis='notification', configuration='labels_ensemble', selection='knee',
+            date='2025-01-01', country='AA;BB', category='other_explained', severity='high',event='World Cup')]
+        rows = matched_notifications(context, events)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['notification_type'], 'group')
+        self.assertEqual(rows[0]['category'], 'other_explained')
+
+
+if __name__ == '__main__':
+    unittest.main()

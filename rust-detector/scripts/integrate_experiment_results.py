@@ -12,6 +12,50 @@ def read(path):
     return json.loads(path.read_text())
 
 
+def import_single_detector_runs(target, source):
+    """Reuse unchanged single-detector variants after ensemble-only retuning."""
+    config, original = read(target / 'experiment.json'), read(source / 'experiment.json')
+    variants = ('original', 'labels', 'fixed_3sigma')
+    if any(v in config['variants'] for v in variants):
+        raise ValueError('Target already contains single-detector variants')
+    for key in (config.keys() | original.keys()) - {'variants', 'ensemble_member_balance'}:
+        if config.get(key) != original.get(key):
+            raise ValueError(f'Incompatible {key}')
+    for name in ('labels.json', 'training-labels.json'):
+        if read(target / 'inputs' / name) != read(source / 'inputs' / name):
+            raise ValueError(f'Label mismatch: {name}')
+    paths = []
+    for country in config['countries']:
+        for suffix in ('.json', '-train.json', '-evaluation.json'):
+            name = country + suffix
+            if read(target / 'inputs' / name) != read(source / 'inputs' / name):
+                raise ValueError(f'Series mismatch: {name}')
+        for seed in config['seeds']:
+            for variant in variants:
+                path = Path(f'runs/{seed}/{country}/{variant}')
+                run = read(source / path / 'result.json')
+                if run['status'] != 'completed' and not run['status'].startswith('skipped_'):
+                    raise ValueError(f'Incomplete source: {path}')
+                if (target / path).exists():
+                    raise ValueError(f'Target run exists: {path}')
+                paths.append(path)
+    for path in paths:
+        shutil.copytree(source / path, target / path)
+    # Keep the original executable with the imported runs' provenance.
+    shutil.copy2(source / 'inputs/cenalert-detector', target / 'inputs/single-detector-binary')
+    config['variants'].update({v: original['variants'][v] for v in variants})
+    write_json(target / 'experiment.json', config)
+    write_json(target / 'integration.json', {
+        'imported_from': str(source), 'imported_variants': list(variants),
+        'imported_binary': 'inputs/single-detector-binary',
+        'source_experiment': original,
+        'ensemble_binary': 'inputs/cenalert-detector',
+    })
+    runs = [read(p) for p in sorted((target / 'runs').glob('*/*/*/result.json'))]
+    export_results(target, runs, config['proximity_days'])
+    print(f'Imported {len(paths)} unchanged single-detector runs.')
+
+
 def integrate(base, replacements, labels_path, output):
     if output.exists():
         raise ValueError(f'Output already exists: {output}')
@@ -76,10 +120,19 @@ def integrate(base, replacements, labels_path, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', type=Path, required=True)
-    parser.add_argument('--replacements', type=Path, nargs='+', required=True)
-    parser.add_argument('--labels', type=Path, required=True)
-    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--replacements', type=Path, nargs='+')
+    parser.add_argument('--labels', type=Path)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--import-single-from', type=Path,
+                        help='Import unchanged single-detector runs into --base in place')
     args = parser.parse_args()
+    if args.import_single_from:
+        if args.replacements or args.labels or args.output:
+            parser.error('--import-single-from only accepts --base')
+        import_single_detector_runs(args.base.resolve(), args.import_single_from.resolve())
+        return
+    if not (args.replacements and args.labels and args.output):
+        parser.error('--replacements, --labels and --output are required')
     integrate(args.base.resolve(), [p.resolve() for p in args.replacements],
               args.labels.resolve(), args.output.resolve())
 

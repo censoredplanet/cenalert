@@ -16,6 +16,7 @@ import numpy as np
 
 from batch_ensemble_tuning import matched_label
 from review_contextualization import evaluation_labels
+from paper_plot_style import apply_paper_style
 
 GROUPS = ["original", "labels", "ensemble", "labels_ensemble"]
 NAMES = {"original": "Chebyshev", "labels": "Chebyshev + labels",
@@ -82,9 +83,34 @@ def draw_front(ax, info, label=True):
                    linewidths=1.7, zorder=5, label=f"{name}: N={int(x)}")
     ax.set_xlabel("Training anomalies")
     ax.set_ylabel("Total training impact")
-    ax.grid(alpha=.18)
+    ax.grid()
     if label:
         ax.legend(fontsize=7, loc="best")
+
+
+def plot_pareto_examples(source, output, countries):
+    config = read_json(source / 'experiment.json')
+    seed, = config['seeds']
+    apply_paper_style()
+    fig, axes = plt.subplots(1, len(countries), squeeze=False,
+                             figsize=(3.5 * len(countries), 2.4), layout='constrained')
+    for ax, country in zip(axes.flat, countries):
+        directory = source / f'runs/{seed}/{country}/labels_ensemble'
+        run = read_json(directory / 'result.json')
+        if run['status'] != 'completed':
+            raise ValueError(f'No completed ensemble front for {country}')
+        front = read_json(directory / 'pareto-front.json')
+        by_count = {}
+        for _, objective in front:
+            by_count[objective[0]] = max(by_count.get(objective[0], -math.inf), -objective[1])
+        info = dict(points=sorted(by_count.items()),
+            knee=selected_point(directory, 'knee', 'labels_ensemble', front),
+            leftmost=selected_point(directory, 'leftmost', 'labels_ensemble', front),
+            knee_found=next(s['knee_found'] for s in run['selections'] if s['selection']=='knee'))
+        draw_front(ax, info)
+        ax.set_title(f'{country}: ensemble + labels')
+    fig.savefig(output / 'pareto-examples.pdf', bbox_inches='tight')
+    plt.close(fig)
 
 
 def main():
@@ -95,9 +121,13 @@ def main():
                         help="countries shown in the manuscript Pareto figure")
     parser.add_argument("--evaluation-labels", type=Path,
                         help="updated test labels; training labels must be unchanged")
+    parser.add_argument('--pareto-only', action='store_true', help='Only refresh the manuscript Pareto figure')
     args = parser.parse_args()
     source, output = args.results.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    if args.pareto_only:
+        plot_pareto_examples(source, output, args.pareto_countries)
+        return
     config = read_json(source / "experiment.json")
     if len(config["seeds"]) != 1:
         raise ValueError("This report requires a single-seed experiment")
@@ -258,8 +288,7 @@ def main():
         pareto_countries=args.pareto_countries)
     (output / "metrics.json").write_text(json.dumps(metrics, indent=2, ensure_ascii=False) + "\n")
 
-    plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.right": False,
-                         "pdf.fonttype": 42, "ps.fonttype": 42})
+    apply_paper_style()
     fig, axes = plt.subplots(1, 2, figsize=(8.2, 3.1), layout="constrained")
     x = np.arange(5)
     for selection, offset, color in [("knee", -.18, COLORS[0]), ("leftmost", .18, COLORS[2])]:

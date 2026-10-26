@@ -818,14 +818,14 @@ Impact thresholds are calibrated on coalesced, label-matched training
 anomalies and held fixed for the test period. Countries with no calibration
 match retain all candidates. Intervals crossing the training cutoff are
 excluded from calibration. `--sparse-gap-days` defaults to one.
-The report compares grouping at four and five countries; `analysis.json`
-contains per-country stages, lost test labels, attribution conflicts, and
+`--minimum-group-countries` selects the grouping threshold (default: four); `analysis.json`
+contains per-country counts, filtered test labels, attribution conflicts, and
 notification groups with country/global label matches. To evaluate updated
 test labels, pass `--evaluation-labels /path/to/labels.json`; training labels
 must remain unchanged. Grouped notifications report both partial and complete
-constituent coverage. This command does not retune or send notifications.
+constituent coverage.
 `unmatched-notifications.csv` lists unmatched knee/fallback notifications using
-five-country grouping. It has one row per constituent anomaly; a shared
+the selected grouping threshold. It has one row per constituent anomaly; a shared
 `notification_id` identifies members of the same cross-country notification.
 
 Add `--all-configurations` to compare all four tuned configurations and the fixed
@@ -843,6 +843,26 @@ coverage and test-label coverage before and after contextualization.
 training anomaly and their test-period impact removals, including sparse removals.
 `low-impact-review.csv` traces each retained IF < 1 anomaly in the available-country
 label-constrained ensemble knee/fallback output to its calibration event(s).
+
+### Event coverage and figures
+
+With `analysis.json` and `contextualization.json` in the results directory,
+`scripts/analyze_notification_outcomes.py` reports event coverage, severity,
+and monthly notification volume. `scripts/analyze_event_coverage.py` compares
+ensemble-only detections with single-detector results and calibration counts
+with a previous experiment supplied through `--previous-results`. Both accept
+`--results` and `--cache` directories.
+
+To plot event-level detection comparisons from saved parameters:
+
+```bash
+python3 scripts/plot_detection_cases.py \
+  --results /path/to/four-group-experiment \
+  --cache /path/to/analysis-cache
+```
+
+This writes `figures/detection-cases.pdf`, showing search interest, the tuned
+single-detector threshold, and the ensemble's detected intervals and impact threshold.
 
 ### Run all-country ensemble tuning
 
