@@ -240,6 +240,14 @@ The ensemble efficiency range is `[0.05, 0.1]`, the residual-ratio range is
 `[0, 1]`, the Isolation Forest minimum-score range is `[0.6, 1.0]`, and the
 LOF minimum-score range is `[1.2, 3.0]`.
 
+Ensemble tuning also limits each member to at most half of the total dense
+anomaly intervals produced by all three members: `2 * max(N) <= sum(N)`.
+Each candidate is evaluated with independent member histories and the shared
+candidate parameters; Croston intervals are excluded. This constraint applies
+with and without label constraints, using only the tuning input period. A
+candidate with zero dense intervals satisfies the balance constraint. Optional
+country-label constraints must also be satisfied.
+
 ```bash
 cargo run --release -- \
   tune \
@@ -255,6 +263,14 @@ Each ensemble Pareto solution has the same `[parameters, objectives]` shape as
 the Chebyshev output. Its parameter order is `window`, `min_residual_ratio`,
 `efficiency`, `chebyshev_z`, `chebyshev_k`,
 `isolation_forest_min_score`, and `lof_min_score`.
+
+To seed an ensemble population with saved candidates, pass
+`--initial-parameters /path/to/initial-parameters.json`. The file is a JSON array
+of seven-value parameter vectors in the order above. The remaining population
+is randomly initialized. Every candidate is evaluated against the current
+training data and constraints, counting toward the evaluation budget.
+`scripts/run_experiment_matrix.py` accepts the same option for a single-country,
+single-ensemble-configuration run and snapshots the supplied vectors.
 
 ### Preserve labeled events
 

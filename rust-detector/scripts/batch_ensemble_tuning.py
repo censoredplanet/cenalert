@@ -28,6 +28,7 @@ class Config:
     threads_per_tuning: int
     seed: int
     algorithm: str = "ensemble"
+    initial_parameters: Path | None = None
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -338,6 +339,8 @@ def tune(
     else:
         proximity_index = command.index("--proximity-days")
         del command[proximity_index : proximity_index + 2]
+    if config.initial_parameters is not None:
+        command.extend(["--initial-parameters", str(config.initial_parameters)])
     return run_command(command)
 
 
@@ -359,6 +362,12 @@ def select(
     return run_command(command)
 
 
+def is_no_feasible_solution(error: Exception) -> bool:
+    message = str(error)
+    return ("detects every label" in message or
+            "no ensemble parameter set satisfying member-balance" in message)
+
+
 def diagnose_infeasible(
     config: Config,
     country: str,
@@ -368,7 +377,12 @@ def diagnose_infeasible(
 ) -> dict[str, Any]:
     front_path = directory / "unconstrained-front.json"
     if not front_path.exists():
-        tune(config, input_path, front_path, country, constrained=False)
+        try:
+            tune(config, input_path, front_path, country, constrained=False)
+        except RuntimeError as error:
+            if not is_no_feasible_solution(error):
+                raise
+            return {"diagnostic_status": "no_feasible_solution", "diagnostic_detail": str(error)}
     front = json.loads(front_path.read_text())
     best: tuple[int, int, float, list[dict[str, Any]]] | None = None
     labels_seen = [False] * len(required)
@@ -471,7 +485,7 @@ def run_country(
             if not (resume and front_path.exists()):
                 tune(config, input_path, front_path, country, constrained=True)
         except RuntimeError as error:
-            if "detects every label" not in str(error):
+            if not is_no_feasible_solution(error):
                 raise
             diagnosis = diagnose_infeasible(config, country, input_path, required, directory)
             result.update(status="no_feasible_solution", detail=str(error), **diagnosis)

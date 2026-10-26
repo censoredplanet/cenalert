@@ -60,9 +60,35 @@ class ExperimentTests(unittest.TestCase):
         matrix.prepare_inputs(self.args)
         manifest = json.loads((self.args.output_directory / "experiment.json").read_text())
         self.assertEqual(set(manifest["variants"]), {"labels", "labels_ensemble"})
+        self.assertEqual(manifest["ensemble_member_balance"], {
+            "unit": "independent_dense_anomaly_intervals", "period": "training",
+            "maximum_share": 0.5, "zero_total_feasible": True,
+        })
         self.args.resume = True
         matrix.prepare_inputs(self.args)
         self.args.variants = ["labels"]
+        with self.assertRaisesRegex(ValueError, "settings changed"):
+            matrix.prepare_inputs(self.args)
+
+    def test_warm_start_is_scoped_snapshotted_and_forwarded(self):
+        self.add_series()
+        initial = self.root / "initial.json"
+        initial.write_text('[[37, 0.002, 0.07, 3.1, 15, 0.75, 1.3]]')
+        self.args.initial_parameters = initial
+        with self.assertRaisesRegex(ValueError, "one country and one ensemble variant"):
+            matrix.prepare_inputs(self.args)
+        self.args.variants = ["labels_ensemble"]
+        matrix.prepare_inputs(self.args)
+        saved = self.args.output_directory / "inputs/initial-parameters.json"
+        self.assertEqual(json.loads(saved.read_text()), json.loads(initial.read_text()))
+        self.args.resume = True
+        matrix.prepare_inputs(self.args)
+        with patch.object(batch, "run_command") as run:
+            config = matrix.replace(self.config, initial_parameters=saved)
+            batch.tune(config, Path("input.json"), Path("front.json"), "RU", True)
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index("--initial-parameters") + 1], str(saved))
+        initial.write_text('[[38, 0.002, 0.07, 3.1, 15, 0.75, 1.3]]')
         with self.assertRaisesRegex(ValueError, "settings changed"):
             matrix.prepare_inputs(self.args)
 
@@ -144,6 +170,26 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual([label["date"] for label in training_labels], ["2024-07-19"])
         training = json.loads((inputs / "RU-train.json").read_text())
         self.assertEqual(training[-1]["date"], "2024-12-31")
+
+    def test_member_balance_failure_is_infeasible_for_both_ensemble_variants(self):
+        (self.root / "inputs").mkdir()
+        (self.root / "inputs/training-labels.json").write_text(self.labels.read_text())
+        for variant in ("ensemble", "labels_ensemble"):
+            with self.subTest(variant=variant), patch.object(matrix, "tune", side_effect=RuntimeError(
+                    "tuning found no ensemble parameter set satisfying member-balance and applicable label constraints")), \
+                    patch.object(matrix, "detect") as detect:
+                result = matrix.run_variant(self.config, "RU", variant,
+                    dict(observations=2, zero_observations=0, training_observations=1,
+                         test_observations=1, training_maximum=10), ["knee"], False)
+            self.assertEqual(result["status"], "no_feasible_solution")
+            detect.assert_not_called()
+
+    def test_balance_failure_in_diagnostic_search_is_reported(self):
+        with patch.object(batch, "tune", side_effect=RuntimeError(
+                "tuning found no ensemble parameter set satisfying member-balance and applicable label constraints")):
+            result = batch.diagnose_infeasible(self.config, "RU", Path("input.json"), [], self.root)
+        self.assertEqual(result["diagnostic_status"], "no_feasible_solution")
+        self.assertNotIn("labels_never_detected", result)
 
     def test_fixed_baseline_uses_only_previous_values(self):
         rows = [{"date": str(date(2025, 1, 1) + timedelta(days=i)), "rate": value}

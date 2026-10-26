@@ -17,7 +17,7 @@ from typing import Any
 
 from batch_ensemble_tuning import (
     Config, convert_series, country_seed, detect, ensemble_parameters, label_matches,
-    matched_label, required_labels, select, source_country, tune, write_csv,
+    is_no_feasible_solution, matched_label, required_labels, select, source_country, tune, write_csv,
 )
 
 
@@ -50,6 +50,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--seeds", type=int, nargs="+", default=[42])
     parser.add_argument("--evaluations", type=int, default=5000)
     parser.add_argument("--population-size", type=int, default=100)
+    parser.add_argument("--initial-parameters", type=Path,
+                        help="Initial ensemble vectors for a single-country, single-variant retry.")
     parser.add_argument("--proximity-days", type=int, default=3)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--threads-per-tuning", type=int, default=1)
@@ -94,6 +96,20 @@ def prepare_inputs(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]
         raise ValueError(f"missing requested countries: {sorted(selected - by_country.keys())}")
     if not by_country:
         raise ValueError("no country series found")
+    initial_path = getattr(args, "initial_parameters", None)
+    initial_parameters = None
+    if initial_path is not None:
+        variants = list(getattr(args, "variants", VARIANTS))
+        if len(by_country) != 1 or len(variants) != 1 or variants[0] not in (
+                "ensemble", "labels_ensemble"):
+            raise ValueError("initial parameters require one country and one ensemble variant")
+        initial_parameters = json.loads(initial_path.read_text())
+        if not isinstance(initial_parameters, list) or not initial_parameters:
+            raise ValueError("initial parameters must be a nonempty array")
+        if len(initial_parameters) > args.population_size:
+            raise ValueError("initial parameter count exceeds population size")
+        if any(not isinstance(row, list) or len(row) != 7 for row in initial_parameters):
+            raise ValueError("each initial ensemble vector must contain seven values")
     labels = json.loads(args.labels.read_text())
     if not isinstance(labels, list) or not labels:
         raise ValueError("labels must be a nonempty JSON array")
@@ -112,12 +128,19 @@ def prepare_inputs(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]
         "initial_population_seeded": False,
         "efficiency_bounds": {"chebyshev": [0.01, 0.1], "ensemble": [0.05, 0.1]},
         "ensemble_score_bounds": {"isolation_forest": [0.6, 1.0], "lof": [1.2, 3.0]},
+        "ensemble_member_balance": {
+            "unit": "independent_dense_anomaly_intervals",
+            "period": "training", "maximum_share": 0.5,
+            "zero_total_feasible": True,
+        },
         "global_proximity_days": min(args.proximity_days, 1),
         "postprocessing": False,
         "train_end": str(args.train_end), "test_end": str(args.test_end),
         "baseline_window": args.baseline_window, "baseline_sigma": 3.0,
     }
     # JSON normalizes tuples so manifests can be compared after deserialization.
+    if initial_parameters is not None:
+        manifest["initial_parameters"] = initial_parameters
     manifest = json.loads(json.dumps(manifest))
     if existing:
         if not args.resume:
@@ -126,6 +149,9 @@ def prepare_inputs(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]
             raise ValueError("experiment settings changed; use a new output directory")
         if json.loads((output / "inputs/labels.json").read_text()) != labels:
             raise ValueError("labels changed; use a new output directory")
+        if initial_parameters is not None and json.loads(
+                (output / "inputs/initial-parameters.json").read_text()) != initial_parameters:
+            raise ValueError("initial parameters changed; use a new output directory")
         if not filecmp.cmp(args.rust_binary, output / "inputs/cenalert-detector", shallow=False):
             raise ValueError("detector binary changed; use a new output directory")
         for name in ("run_experiment_matrix.py", "batch_ensemble_tuning.py"):
@@ -137,6 +163,8 @@ def prepare_inputs(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]
             raise ValueError("output directory is nonempty without an experiment manifest")
         (output / "inputs").mkdir(parents=True, exist_ok=True)
         write_json(output / "inputs/labels.json", labels)
+        if initial_parameters is not None:
+            write_json(output / "inputs/initial-parameters.json", initial_parameters)
         shutil.copy2(args.rust_binary, output / "inputs/cenalert-detector")
         for name in ("run_experiment_matrix.py", "batch_ensemble_tuning.py"):
             shutil.copy2(Path(__file__).with_name(name), output / "inputs" / name)
@@ -318,7 +346,7 @@ def run_variant(config: Config, country: str, variant: str, details: dict[str, A
             })
         result["status"] = "completed"
     except Exception as error:
-        result["status"] = ("no_feasible_solution" if "detects every label" in str(error)
+        result["status"] = ("no_feasible_solution" if is_no_feasible_solution(error)
                             else "error")
         result["detail"] = str(error)
     finally:
@@ -425,7 +453,9 @@ def main() -> None:
                     rust_binary=output / "inputs/cenalert-detector", work_directory=output,
                     evaluations=args.evaluations, population_size=args.population_size,
                     proximity_days=args.proximity_days, coalesce_sparse_gap_days=1,
-                    threads_per_tuning=args.threads_per_tuning, seed=0)
+                    threads_per_tuning=args.threads_per_tuning, seed=0,
+                    initial_parameters=(output / "inputs/initial-parameters.json"
+                                        if args.initial_parameters is not None else None))
     results = []
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         jobs = [executor.submit(run_variant, replace(config, seed=seed), country, variant,

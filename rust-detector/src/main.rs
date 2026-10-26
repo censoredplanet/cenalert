@@ -131,6 +131,9 @@ struct TuneArgs {
     /// Destination for the Pareto-front JSON.
     #[arg(long)]
     output: PathBuf,
+    /// JSON array of seven-value ensemble vectors to include in the initial population.
+    #[arg(long)]
+    initial_parameters: Option<PathBuf>,
     /// Maximum number of detector evaluations.
     #[arg(long, default_value_t = 5_000)]
     evaluations: u32,
@@ -519,6 +522,17 @@ fn run_tuning(arguments: TuneArgs) -> Result<(), Box<dyn Error>> {
         k_max: arguments.k_max,
         labels,
         proximity_days: arguments.proximity_days.unwrap_or(3),
+        initial_parameters: arguments
+            .initial_parameters
+            .map(|path| -> Result<Vec<[f64; 7]>, Box<dyn Error>> {
+                let values: Vec<[f64; 7]> = serde_json::from_reader(File::open(path)?)?;
+                if values.is_empty() {
+                    return Err("initial parameters must be a nonempty array".into());
+                }
+                Ok(values)
+            })
+            .transpose()?
+            .unwrap_or_default(),
     };
     let (evaluations, solution_count, required_labels) = match arguments.algorithm {
         TuningAlgorithm::Chebyshev => {
@@ -535,6 +549,7 @@ fn run_tuning(arguments: TuneArgs) -> Result<(), Box<dyn Error>> {
         }
         TuningAlgorithm::Ensemble => {
             let result = tune_ensemble(&observations, config)?;
+            eprintln!("ensemble feasibility requires each member to produce at most half of all independent dense anomaly intervals");
             serde_json::to_writer_pretty(
                 BufWriter::new(File::create(arguments.output)?),
                 &result.solutions,
@@ -715,12 +730,15 @@ mod tests {
             "series.json",
             "--output",
             "front.json",
+            "--initial-parameters",
+            "initial.json",
         ])
         .unwrap();
         let Command::Tune(tune_arguments) = tuned.command else {
             panic!("expected tune command");
         };
         assert_eq!(tune_arguments.algorithm, TuningAlgorithm::Ensemble);
+        assert_eq!(tune_arguments.initial_parameters, Some(PathBuf::from("initial.json")));
 
         let selected = Cli::try_parse_from([
             "cenalert-detector",

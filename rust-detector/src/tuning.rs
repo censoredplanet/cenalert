@@ -2,16 +2,17 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
-use optirustic::algorithms::{Algorithm, NSGA2Arg, StoppingCondition, NSGA2};
+use optirustic::algorithms::{Algorithm, AlgorithmSerialisedExport, NSGA2Arg, StoppingCondition, NSGA2};
 use optirustic::core::{
     BoundedNumber, Constraint, EvaluationResult, Evaluator, Individual, Objective,
-    ObjectiveDirection, Problem, RelationalOperator, VariableType,
+    ObjectiveDirection, Problem, RelationalOperator, VariableType, VariableValue,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
     label_coverage, labels::required_country_labels, ChebyshevDetector, Detector,
-    DetectorParameters, EnsembleDetector, EnsembleParameters, EventLabel, Observation,
+    DetectorParameters, EnsembleDetector, EnsembleParameters, EventLabel, IsolationForestDetector,
+    LocalOutlierFactorDetector, Observation, OutlierDetectorParameters,
 };
 
 const ANOMALY_COUNT: &str = "anomaly_count";
@@ -24,6 +25,7 @@ const EFFICIENCY: &str = "efficiency";
 const ISOLATION_FOREST_MIN_SCORE: &str = "isolation_forest_min_score";
 const LOF_MIN_SCORE: &str = "lof_min_score";
 const MISSED_LABELS: &str = "missed_labels";
+const MEMBER_IMBALANCE: &str = "member_imbalance";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TuningConfig {
@@ -35,6 +37,8 @@ pub struct TuningConfig {
     pub k_max: f64,
     pub labels: Vec<EventLabel>,
     pub proximity_days: u32,
+    /// Ensemble vectors to include in the initial population, in Pareto JSON order.
+    pub initial_parameters: Vec<[f64; 7]>,
 }
 
 impl Default for TuningConfig {
@@ -48,6 +52,7 @@ impl Default for TuningConfig {
             k_max: 18.0,
             labels: Vec::new(),
             proximity_days: 3,
+            initial_parameters: Vec::new(),
         }
     }
 }
@@ -108,7 +113,8 @@ impl Evaluator for EnsembleEvaluator {
     fn evaluate(&self, individual: &Individual) -> Result<EvaluationResult, Box<dyn Error>> {
         let parameters = ensemble_parameters(ensemble_parameter_values(individual)?);
         let result = EnsembleDetector::new(parameters).detect(&self.observations);
-        evaluation_result(&result.anomalies, &self.labels, self.proximity_days)
+        let counts = ensemble_member_counts(&self.observations, parameters);
+        ensemble_evaluation_result(&result.anomalies, &self.labels, self.proximity_days, counts)
     }
 }
 
@@ -117,6 +123,9 @@ pub fn tune_chebyshev(
     config: TuningConfig,
 ) -> Result<TuningResult, Box<dyn Error>> {
     validate_config(&config)?;
+    if !config.initial_parameters.is_empty() {
+        return Err("initial parameters are supported only for ensemble tuning".into());
+    }
     let (required_labels, required_label_count) = tuning_labels(observations, &config)?;
     let problem = create_problem(observations, &config, &required_labels)?;
     let mut algorithm = NSGA2::new(problem, nsga_options(&config))?;
@@ -149,8 +158,20 @@ pub fn tune_ensemble(
     validate_config(&config)?;
     let (required_labels, required_label_count) = tuning_labels(observations, &config)?;
     let problem = create_ensemble_problem(observations, &config, &required_labels)?;
-    let mut algorithm = NSGA2::new(problem, nsga_options(&config))?;
-    algorithm.run()?;
+    let draft = NSGA2::new(problem, nsga_options(&config))?;
+    let (mut algorithm, initial_evaluations) = if config.initial_parameters.is_empty() {
+        (draft, 0)
+    } else {
+        warm_start_ensemble(draft, observations, &config, &required_labels)?
+    };
+    if initial_evaluations == 0 {
+        algorithm.run()?;
+    } else {
+        algorithm.initialise()?;
+        while initial_evaluations + algorithm.number_of_function_evaluations() < config.evaluations {
+            algorithm.evolve()?;
+        }
+    }
 
     let mut solutions = algorithm
         .population()
@@ -161,15 +182,96 @@ pub fn tune_ensemble(
         .collect::<Result<Vec<_>, _>>()?;
     solutions.sort_unstable_by(compare_ensemble_solutions);
     solutions.dedup();
-    if required_label_count > 0 && solutions.is_empty() {
-        return Err("tuning found no ensemble parameter set that detects every label".into());
+    if solutions.is_empty() {
+        return Err("tuning found no ensemble parameter set satisfying member-balance and applicable label constraints".into());
     }
 
     Ok(EnsembleTuningResult {
         solutions,
-        evaluations: algorithm.number_of_function_evaluations(),
+        evaluations: initial_evaluations + algorithm.number_of_function_evaluations(),
         required_labels: required_label_count,
     })
+}
+
+fn warm_start_ensemble(
+    draft: NSGA2,
+    observations: &[Observation],
+    config: &TuningConfig,
+    labels: &[EventLabel],
+) -> Result<(NSGA2, u32), Box<dyn Error>> {
+    if config.initial_parameters.len() > config.population_size {
+        return Err("initial parameter count exceeds population size".into());
+    }
+    let mut export = draft.get_results();
+    let names = [
+        WINDOW, MIN_RESIDUAL_RATIO, EFFICIENCY, Z, K,
+        ISOLATION_FOREST_MIN_SCORE, LOF_MIN_SCORE,
+    ];
+    for (individual, values) in export.individuals.iter_mut().zip(&config.initial_parameters) {
+        for (name, value) in names.iter().zip(values) {
+            let VariableType::Real(variable) = export.problem.get_variable(name)? else {
+                return Err("ensemble tuning requires real-valued variables".into());
+            };
+            let (lower, upper) = variable.bounds();
+            if !value.is_finite() || !(lower..=upper).contains(value) {
+                return Err(format!("initial {name}={value} is outside [{lower}, {upper}]").into());
+            }
+            individual.update_variable(name, VariableValue::Real(*value))?;
+        }
+    }
+    // optirustic imports evaluated populations. Recompute every objective and
+    // constraint with the current evaluator before using its population loader.
+    let mut evaluations = 0;
+    if config.parallel {
+        NSGA2::do_parallel_evaluation(&mut export.individuals, &mut evaluations)?;
+    } else {
+        NSGA2::do_evaluation(&mut export.individuals, &mut evaluations)?;
+    }
+    let population = AlgorithmSerialisedExport {
+        options: draft.algorithm_options(),
+        problem: export.problem.serialise(),
+        individuals: export.individuals.iter().map(Individual::serialise).collect(),
+        generation: 0,
+        number_of_function_evaluations: evaluations,
+        algorithm: export.algorithm,
+        additional_data: None,
+        took: export.took,
+        exported_on: chrono::Utc::now(),
+    };
+    let (temporary, file) = PopulationFile::create()?;
+    serde_json::to_writer(file, &population)?;
+    let mut options = nsga_options(config);
+    options.resume_from_file = Some(temporary.0.clone());
+    let problem = create_ensemble_problem(observations, config, labels)?;
+    Ok((NSGA2::new(problem, options)?, evaluations))
+}
+
+struct PopulationFile(std::path::PathBuf);
+
+impl PopulationFile {
+    fn create() -> std::io::Result<(Self, std::fs::File)> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        loop {
+            let path = std::env::temp_dir().join(format!(
+                "cenalert-population-{}-{}.json",
+                std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed),
+            ));
+            match std::fs::OpenOptions::new()
+                .write(true).create_new(true).open(&path)
+            {
+                Ok(file) => return Ok((Self(path), file)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+    }
+}
+
+impl Drop for PopulationFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 pub fn evaluate_parameters(observations: &[Observation], raw_parameters: [f64; 5]) -> [f64; 2] {
@@ -205,6 +307,59 @@ pub fn ensemble_parameters(raw_parameters: [f64; 7]) -> EnsembleParameters {
         isolation_forest_min_score: raw_parameters[5],
         lof_min_score: raw_parameters[6],
     }
+}
+
+/// Dense anomaly intervals from independent Chebyshev, iForest, and LOF runs,
+/// in that order. Each member uses the candidate's shared parameters and its
+/// own evolving history, including the normal end-of-anomaly rules.
+pub fn ensemble_member_counts(
+    observations: &[Observation],
+    parameters: EnsembleParameters,
+) -> [usize; 3] {
+    let outlier_parameters = |min_score| OutlierDetectorParameters {
+        window: parameters.window,
+        min_score,
+        min_residual_ratio: parameters.min_residual_ratio,
+        efficiency: parameters.efficiency,
+    };
+    let chebyshev = ChebyshevDetector::new(DetectorParameters {
+        window: parameters.window,
+        z: parameters.chebyshev_z,
+        k: parameters.chebyshev_k,
+        min_residual_ratio: parameters.min_residual_ratio,
+        efficiency: parameters.efficiency,
+    })
+    .detect(observations);
+    let isolation_forest =
+        IsolationForestDetector::new(outlier_parameters(parameters.isolation_forest_min_score))
+            .detect(observations);
+    let lof = LocalOutlierFactorDetector::new(outlier_parameters(parameters.lof_min_score))
+        .detect(observations);
+    [chebyshev, isolation_forest, lof].map(|result| dense_interval_count(&result.anomalies))
+}
+
+fn dense_interval_count(anomalies: &[crate::Anomaly]) -> usize {
+    anomalies.iter().filter(|anomaly| !anomaly.sparse).count()
+}
+
+fn member_imbalance(counts: [usize; 3]) -> usize {
+    let largest = *counts.iter().max().expect("three ensemble members");
+    let others = counts.iter().sum::<usize>() - largest;
+    largest.saturating_sub(others)
+}
+
+fn ensemble_evaluation_result(
+    anomalies: &[crate::Anomaly],
+    labels: &[EventLabel],
+    proximity_days: u32,
+    counts: [usize; 3],
+) -> Result<EvaluationResult, Box<dyn Error>> {
+    let mut result = evaluation_result(anomalies, labels, proximity_days)?;
+    result
+        .constraints
+        .get_or_insert_with(HashMap::new)
+        .insert(MEMBER_IMBALANCE.to_owned(), member_imbalance(counts) as f64);
+    Ok(result)
 }
 
 fn evaluation_result(
@@ -291,17 +446,22 @@ fn create_ensemble_problem(
         real_variable(ISOLATION_FOREST_MIN_SCORE, 0.6, 1.0)?,
         real_variable(LOF_MIN_SCORE, 1.2, 3.0)?,
     ];
-    let constraints = (!required_labels.is_empty()).then(|| {
-        vec![Constraint::new(
+    let mut constraints = vec![Constraint::new(
+        MEMBER_IMBALANCE,
+        RelationalOperator::EqualTo,
+        0.0,
+    )];
+    if !required_labels.is_empty() {
+        constraints.push(Constraint::new(
             MISSED_LABELS,
             RelationalOperator::EqualTo,
             0.0,
-        )]
-    });
+        ));
+    }
     Ok(Problem::new(
         objectives,
         variables,
-        constraints,
+        Some(constraints),
         Box::new(EnsembleEvaluator {
             observations: Arc::from(observations),
             labels: Arc::from(required_labels),
@@ -588,8 +748,151 @@ mod tests {
     }
 
     #[test]
+    fn member_balance_accepts_equality_and_zero_counts() {
+        for counts in [[0, 0, 0], [1, 1, 0], [100, 120, 220], [20, 20, 20]] {
+            assert_eq!(member_imbalance(counts), 0);
+        }
+        for counts in [[100, 120, 500], [500, 120, 100], [100, 500, 120]] {
+            assert_eq!(member_imbalance(counts), 280);
+        }
+        assert_eq!(member_imbalance([0, 1, 0]), 1);
+    }
+
+    #[test]
+    fn dense_interval_count_excludes_croston_and_ignores_duration() {
+        let first = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let anomaly = crate::Anomaly {
+            start: first,
+            end: first + chrono::Duration::days(9),
+            peak: first,
+            peak_value: None,
+            score: 3.0,
+            residual: 1.0,
+            impact: 10.0,
+            sparse: false,
+            component_starts: Vec::new(),
+            ensemble_vote: None,
+        };
+        let sparse = crate::Anomaly {
+            sparse: true,
+            ..anomaly.clone()
+        };
+        assert_eq!(dense_interval_count(&[anomaly, sparse]), 1);
+    }
+
+    #[test]
+    fn balance_is_enforced_with_and_without_label_constraints() {
+        let series = observations(&vec![0.0; 100]);
+        let label = EventLabel::new(series[50].date, crate::LabelScope::Country);
+        for labels in [Vec::new(), vec![label]] {
+            let problem = Arc::new(
+                create_ensemble_problem(&series, &TuningConfig::default(), &labels).unwrap(),
+            );
+            assert!(problem
+                .constraint_names()
+                .contains(&MEMBER_IMBALANCE.to_owned()));
+            assert_eq!(
+                problem.number_of_constraints(),
+                1 + usize::from(!labels.is_empty())
+            );
+            let individual = Individual::new(Arc::clone(&problem));
+            let evaluated = problem.evaluator().evaluate(&individual).unwrap();
+            let constraints = evaluated.constraints.unwrap();
+            assert_eq!(constraints[MEMBER_IMBALANCE], 0.0);
+            if !labels.is_empty() {
+                assert_eq!(constraints[MISSED_LABELS], 1.0);
+            }
+            let imbalanced = ensemble_evaluation_result(&[], &labels, 3, [1, 5, 1]).unwrap();
+            assert_eq!(imbalanced.constraints.unwrap()[MEMBER_IMBALANCE], 3.0);
+            let single = create_problem(&series, &TuningConfig::default(), &labels).unwrap();
+            assert!(!single
+                .constraint_names()
+                .contains(&MEMBER_IMBALANCE.to_owned()));
+        }
+    }
+
+    #[test]
+    fn member_counts_use_independent_interval_end_conditions() {
+        let mut values = vec![10.0; 90];
+        values.extend([100.0, 90.0, 80.0, 10.0]);
+        let series = observations(&values);
+        let parameters = ensemble_parameters([60.0, 0.05, 0.05, 4.0, 6.0, 0.6, 1.2]);
+        let counts = ensemble_member_counts(&series, parameters);
+        assert_eq!(counts, [1, 1, 1]);
+        let mut sparse_values = vec![0.0; 90];
+        sparse_values.extend([100.0, 0.0, 0.0, 90.0, 0.0]);
+        let sparse = observations(&sparse_values);
+        assert!(!EnsembleDetector::new(parameters)
+            .detect(&sparse)
+            .anomalies
+            .is_empty());
+        assert_eq!(ensemble_member_counts(&sparse, parameters), [0, 0, 0]);
+    }
+
+    #[test]
+    fn warm_start_keeps_supplied_vectors_and_counts_initial_evaluations() {
+        let seed = [37.0, 0.002, 0.07, 3.1, 15.0, 0.75, 1.3];
+        for (evaluations, parallel) in [(4, false), (8, true)] {
+            let result = tune_ensemble(
+                &observations(&vec![0.0; 100]),
+                TuningConfig {
+                    evaluations,
+                    population_size: 4,
+                    parallel,
+                    initial_parameters: vec![seed],
+                    ..TuningConfig::default()
+                },
+            ).unwrap();
+            assert_eq!(result.evaluations, evaluations);
+            if evaluations == 4 {
+                assert!(result.solutions.iter().any(|solution| solution.0 == seed));
+            }
+        }
+    }
+
+    #[test]
+    fn warm_start_rechecks_current_label_constraints() {
+        let result = tune_ensemble(
+            &observations(&vec![0.0; 100]),
+            TuningConfig {
+                evaluations: 4,
+                population_size: 4,
+                parallel: false,
+                initial_parameters: vec![[37.0, 0.002, 0.07, 3.1, 15.0, 0.75, 1.3]],
+                labels: vec![EventLabel::new(
+                    NaiveDate::from_ymd_opt(2025, 2, 1).unwrap(),
+                    crate::LabelScope::Country,
+                )],
+                ..TuningConfig::default()
+            },
+        );
+        assert!(result.unwrap_err().to_string().contains("no ensemble parameter set"));
+    }
+
+    #[test]
+    fn warm_start_rejects_invalid_vectors() {
+        let seed = [37.0, 0.002, 0.07, 3.1, 15.0, 0.75, 1.3];
+        let series = observations(&vec![0.0; 100]);
+        let config = TuningConfig {
+            evaluations: 4, population_size: 4, parallel: false,
+            initial_parameters: vec![seed], ..TuningConfig::default()
+        };
+        assert!(tune_chebyshev(&series, config.clone()).is_err());
+        let mut too_many = config.clone();
+        too_many.initial_parameters = vec![seed; 5];
+        assert!(tune_ensemble(&series, too_many).unwrap_err().to_string()
+            .contains("exceeds population size"));
+        for value in [1.0, f64::NAN, f64::INFINITY] {
+            let mut invalid = config.clone();
+            invalid.initial_parameters[0][6] = value;
+            assert!(tune_ensemble(&series, invalid).unwrap_err().to_string()
+                .contains("outside"));
+        }
+    }
+
+    #[test]
     fn ensemble_tuning_returns_valid_rank_one_parameters() {
-        let mut values: Vec<f64> = (0..90).map(|index| 8.0 + (index % 5) as f64).collect();
+        let mut values = vec![10.0; 90];
         values.extend([100.0, 90.0, 10.0]);
         let result = tune_ensemble(
             &observations(&values),
@@ -613,6 +916,10 @@ mod tests {
             assert!((5.0..=18.0).contains(&parameters.chebyshev_k));
             assert!((0.6..=1.0).contains(&parameters.isolation_forest_min_score));
             assert!((1.2..=3.0).contains(&parameters.lof_min_score));
+            assert_eq!(
+                member_imbalance(ensemble_member_counts(&observations(&values), parameters)),
+                0
+            );
         }
     }
 
