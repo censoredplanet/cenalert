@@ -844,6 +844,35 @@ training anomaly and their test-period impact removals, including sparse removal
 `low-impact-review.csv` traces each retained IF < 1 anomaly in the available-country
 label-constrained ensemble knee/fallback output to its calibration event(s).
 
+### Expanding-window evaluation
+
+Prepare a separate Z-Score experiment with training cutoffs at the end of 2018,
+2020, 2022, and 2024, each followed by two evaluation years (through August 2026
+for the final period):
+
+```bash
+python3 scripts/run_expanding_windows.py prepare \
+  --source-results /path/to/paper-results \
+  --rust-binary /path/to/paper-results/inputs/single-detector-binary \
+  --output /path/to/expanding-window --workers 4
+```
+
+Preparation freezes the series, labels, executable, and scripts without running
+tuning. Each window uses only labels dated through its training cutoff. To run:
+
+```bash
+python3 /path/to/expanding-window/code/run_expanding_windows.py run \
+  --directory /path/to/expanding-window
+```
+
+Each window evaluates Z-Score with and without label constraints, using 5,000
+evaluations, population 100, seed 42, and knee and leftmost selection. Repeating
+the command resumes the prepared experiment. Starting with the second window,
+the preceding window's parameters are also evaluated on the same test period,
+with their original training-scale reference. `summary.csv` reports coverage
+and detection counts; paired comparisons use countries completed by both models.
+`country-results.csv` records individual countries and any failed or skipped runs.
+
 ### Event coverage and figures
 
 Download country series from the public Dashboard API with

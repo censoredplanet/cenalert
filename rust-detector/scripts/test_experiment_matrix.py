@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import batch_ensemble_tuning as batch
 import run_experiment_matrix as matrix
+import run_expanding_windows as expanding
 
 
 class ExperimentTests(unittest.TestCase):
@@ -39,6 +40,71 @@ class ExperimentTests(unittest.TestCase):
                  "rate": 0.0 if zero else (100.0 if i in (200, 566) else 10.0 + i % 3)}
                 for i in range(606)]
         (self.series / f"{country}.json").write_text(json.dumps(rows))
+
+    def test_expanding_preparation_only_snapshots_past_training_data(self):
+        source = self.root / 'source'
+        (source / 'inputs').mkdir(parents=True)
+        matrix.write_json(source / 'experiment.json', dict(countries=['RU', 'TD'],
+                          test_end='2026-08-31', proximity_days=3))
+        labels = [dict(scope='country', country_code='RU', date=f'{year}-06-01')
+                  for year in (2018, 2020, 2022, 2024, 2026)]
+        matrix.write_json(source / 'inputs/labels.json', labels)
+        for country in ('RU', 'TD'):
+            matrix.write_json(source / 'inputs' / f'{country}.json', [
+                dict(country=country, date=f'{year}-06-01', rate=year if country == 'RU' else 0)
+                for year in range(2011, 2027)])
+        binary = self.root / 'detector'
+        binary.write_bytes(b'preparation must not execute this file')
+        output = self.root / 'expanding'
+        expanding.prepare(source, output, binary, 4)
+        plan = expanding.read(output / 'plan.json')
+        self.assertEqual(plan['countries'], ['RU'])
+        expanding.verify_snapshot(output, plan)
+        for cutoff, end in expanding.WINDOWS:
+            fold = output / expanding.window_name(cutoff)
+            training = expanding.read(fold / 'inputs/RU-train.json')
+            evaluation = expanding.read(fold / 'inputs/RU-evaluation.json')
+            training_labels = expanding.read(fold / 'inputs/training-labels.json')
+            self.assertTrue(all(r['date'] <= cutoff for r in training))
+            self.assertTrue(all(r['date'] <= end for r in evaluation))
+            self.assertEqual(training_labels, [l for l in labels if l['date'] <= cutoff])
+            self.assertFalse((fold / 'runs').exists())
+        (output / 'labels.json').write_text('[]')
+        with self.assertRaisesRegex(ValueError, 'Prepared input changed'):
+            expanding.verify_snapshot(output, plan)
+        with self.assertRaises(ValueError):
+            expanding.prepare(source, source / 'new', binary, 4)
+
+    def test_expanding_summary_pairs_the_same_countries(self):
+        base = dict(train_end='2020-12-31', test_end='2022-12-31', variant='original',
+                    selection='knee', status='completed', anomaly_count=3,
+                    country_labels_total=2, country_labels_covered=1)
+        rows = [dict(base, country='RU', model='retuned'),
+                dict(base, country='RU', model='previous', country_labels_covered=2),
+                dict(base, country='IN', model='retuned'),
+                dict(base, country='IN', model='previous', status='no_feasible_solution')]
+        summary = [r for r in expanding.summarize(rows) if r['train_end']=='2020-12-31'
+                   and r['variant']=='original' and r['selection']=='knee']
+        self.assertEqual([r['countries'] for r in summary], [2, 1, 1])
+        self.assertEqual([r['coverage'] for r in summary], [.5, .5, 1])
+
+    def test_previous_parameters_keep_the_previous_scale_reference(self):
+        root = self.root / 'previous-test'
+        old = root / 'train-through-2018/runs/42/RU/original'
+        current = root / 'train-through-2020'
+        old.mkdir(parents=True)
+        current.mkdir(parents=True)
+        matrix.write_json(old / 'result.json', {'status':'completed'})
+        matrix.write_json(current / 'input-summary.json', {'RU': dict(test_observations=2,
+            test_first_date='2021-01-01', test_last_date='2022-12-31')})
+        matrix.write_json(root / 'labels.json', [])
+        plan = dict(seed=42, evaluations=5000, population_size=100, proximity_days=3)
+        with patch.object(expanding, 'detect', return_value={'anomalies': []}) as detection:
+            row = expanding.previous_result(root, plan, '2020-12-31', '2022-12-31',
+                                            '2018-12-31', 'RU', 'original', 'knee')
+        self.assertEqual(detection.call_args.args[-1], '2018-12-31')
+        self.assertEqual(row['parameter_train_end'], '2018-12-31')
+        self.assertEqual(row['anomaly_count'], 0)
 
     def test_constraints_only_reach_labeled_variants(self):
         for variant, (algorithm, constrained) in matrix.VARIANTS.items():
