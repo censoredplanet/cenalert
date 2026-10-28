@@ -846,6 +846,11 @@ label-constrained ensemble knee/fallback output to its calibration event(s).
 
 ### Event coverage and figures
 
+Download country series from the public Dashboard API with
+`python3 scripts/download_dashboard_series.py --output-directory /path/to/series`.
+Use `--countries RU TM` to select a subset. The download manifest records the
+endpoint, retrieval time, country coverage, and failures.
+
 With `analysis.json` and `contextualization.json` in the results directory,
 `scripts/analyze_notification_outcomes.py` reports event coverage, severity,
 and monthly notification volume. `scripts/analyze_event_coverage.py` compares
@@ -856,13 +861,76 @@ with a previous experiment supplied through `--previous-results`. Both accept
 To plot event-level detection comparisons from saved parameters:
 
 ```bash
+cargo build --release --locked
 python3 scripts/plot_detection_cases.py \
   --results /path/to/four-group-experiment \
   --cache /path/to/analysis-cache
 ```
 
-This writes `figures/detection-cases.pdf`, showing search interest, the tuned
-single-detector threshold, and the ensemble's detected intervals and impact threshold.
+This writes `figures/detection-cases.pdf`, with Z-Score and ensemble panels for
+each event, and `figures/detection-cases-all.pdf` with all restriction labels
+matched by the constrained ensemble but not by constrained Z-Score.
+Each review window starts 30 days before the ensemble onset. The plot uses saved parameters and verifies that the diagnostic
+replay reproduces the saved anomalies. On idle dense days, the ensemble curve
+is an inverse-score estimate from the current detector window: each member's
+score threshold is bracketed above the window mean and inverted, then the
+second-smallest value is used. During detected intervals, the curve uses the
+stored impact threshold. `--rust-binary` selects the diagnostic executable;
+the default is `target/release/cenalert-detector`.
+
+`python3 scripts/analyze_explained_impact.py --results /path/to/four-group-experiment`
+reports mean, median, and cumulative impact by event category in `analysis.json`,
+exports country-level values to `impact-summary.csv`, and plots
+`figures/explained-impact.pdf`. Impact is accumulated over retained anomaly
+intervals before cross-country grouping, counting each interval once.
+
+To compare test coverage at seven positions on each saved training Pareto front:
+
+```bash
+python3 scripts/review_saved_fronts.py \
+  --results /path/to/four-group-experiment \
+  --output /path/to/front-review --stage curves --minimum-countries 4
+python3 scripts/plot_front_coverage.py \
+  --input /path/to/front-review/coverage-curves.csv --output /path/to/front-review
+```
+
+`--stage diagnostics` evaluates saved candidates for countries with no feasible
+solution and exports missed labels and member scores. These commands replay
+saved parameters without running optimization. The cache records hashes of the
+inputs, labels, Pareto fronts, executable, and analysis code.
+
+### Repair evaluation observations
+
+Prepare date-specific replacements from archived daily samples in a separate directory:
+
+```bash
+python3 scripts/repair_evaluation_dates.py \
+  --results /path/to/four-group-experiment \
+  --raw-directory /path/to/daily_samples \
+  --dates 2025-09-20 2025-09-25 2025-10-03 \
+  --output /path/to/evaluation-repair
+```
+
+The script uses the next complete post-date sample batch and scales it against
+positive preceding observations, excluding the repair dates. It retains the
+any-zero aggregation rule and requires ten positive overlap pairs. Values with
+insufficient overlap remain unchanged; `data-quality.json` records the sample
+hashes, calibration pairs, and replacements.
+
+Place the updated evaluation labels in `/path/to/evaluation-repair/labels.json`,
+then replay the saved parameters:
+
+```bash
+python3 scripts/replay_evaluation.py \
+  --results /path/to/four-group-experiment \
+  --repairs /path/to/evaluation-repair --workers 4
+```
+
+Inspect `detection-comparison.json`, then run the same command with `--apply`
+to update the results. Original inputs and detections are saved under
+`evaluation-repair/original`. Training observations, labels, and detections are
+checked for equality before applying changes. Rerun contextualization and the
+analysis scripts on the updated results.
 
 ### Run all-country ensemble tuning
 

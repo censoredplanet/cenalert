@@ -56,6 +56,9 @@ pub struct AnnotatedObservation {
     pub score: Option<f64>,
     pub residual: Option<f64>,
     pub threshold: Option<f64>,
+    /// Inverse-score estimate for plotting dense, non-anomalous observations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_threshold: Option<f64>,
     pub minimum_score: Option<f64>,
     pub coefficient_of_variation_squared: Option<f64>,
     pub average_interdemand_interval: Option<f64>,
@@ -72,6 +75,7 @@ impl AnnotatedObservation {
             score: None,
             residual: None,
             threshold: None,
+            diagnostic_threshold: None,
             minimum_score: None,
             coefficient_of_variation_squared: None,
             average_interdemand_interval: None,

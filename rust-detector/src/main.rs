@@ -98,6 +98,12 @@ struct DetectArgs {
     /// Include daily values and detector diagnostics in the JSON output.
     #[arg(long)]
     include_annotated: bool,
+    /// First date for optional ensemble threshold estimates on idle dense days.
+    #[arg(long, requires_all = ["include_annotated", "thresholds_through"])]
+    thresholds_from: Option<chrono::NaiveDate>,
+    /// Last date for optional ensemble threshold estimates.
+    #[arg(long, requires = "thresholds_from")]
+    thresholds_through: Option<chrono::NaiveDate>,
     /// Freeze Croston and output scaling to the maximum through this training date.
     #[arg(long)]
     reference_end: Option<chrono::NaiveDate>,
@@ -370,6 +376,9 @@ fn knee_selection_message(
 }
 
 fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
+    if arguments.thresholds_from.is_some() && arguments.algorithm != DetectionAlgorithm::Ensemble {
+        return Err("threshold diagnostics require --algorithm ensemble".into());
+    }
     let observations = parse_dashboard_json(File::open(arguments.input)?)?;
     let reference_maximum = if let Some(end) = arguments.reference_end {
         if !matches!(
@@ -434,6 +443,14 @@ fn run_detection(arguments: DetectArgs) -> Result<(), Box<dyn Error>> {
         DetectionAlgorithm::Ensemble => {
             let parameters = parse_ensemble_parameters_json(parameter_file)?;
             let mut detector = EnsembleDetector::new(parameters);
+            if let (Some(first), Some(last)) =
+                (arguments.thresholds_from, arguments.thresholds_through)
+            {
+                if first > last {
+                    return Err("--thresholds-from must not follow --thresholds-through".into());
+                }
+                detector = detector.with_threshold_diagnostics(first, last);
+            }
             if let Some(maximum) = reference_maximum {
                 detector = detector.with_reference_maximum(maximum);
             }
@@ -738,7 +755,10 @@ mod tests {
             panic!("expected tune command");
         };
         assert_eq!(tune_arguments.algorithm, TuningAlgorithm::Ensemble);
-        assert_eq!(tune_arguments.initial_parameters, Some(PathBuf::from("initial.json")));
+        assert_eq!(
+            tune_arguments.initial_parameters,
+            Some(PathBuf::from("initial.json"))
+        );
 
         let selected = Cli::try_parse_from([
             "cenalert-detector",

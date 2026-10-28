@@ -92,10 +92,11 @@ def stitch_two_windows_ratio_coarse(df1: pd.DataFrame,
                              df2_coarse: pd.DataFrame,
                              overlap: list,
                              write=False) -> pd.DataFrame:
-    df1_values = df1[df1['date'].isin(overlap)]['value']
-    df2_values = df2[df2['date'].isin(overlap)]['value']
-
-    ratios = np.array([v1 / v2 for v1, v2 in zip(df1_values.to_list(), df2_values.to_list()) if v1 != 0 and v2 != 0])
+    paired = df1[df1['date'].isin(overlap)][['date', 'value']].merge(
+        df2[df2['date'].isin(overlap)][['date', 'value']], on='date',
+        suffixes=('_old', '_new'), validate='one_to_one')
+    paired = paired[(paired.value_old > 0) & (paired.value_new > 0)]
+    ratios = (paired.value_old / paired.value_new).to_numpy()
     new_portion = df2[~df2['date'].isin(overlap)].reset_index(drop=True)
 
     if write:

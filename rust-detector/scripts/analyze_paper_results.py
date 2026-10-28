@@ -30,8 +30,16 @@ RESTRICTION_EVENTS = {
     ('SS','2025-01-22'), ('TM','2025-03-29'), ('TM','2025-07-21'),
     ('TR','2025-03-19'), ('TR','2025-09-08'), ('TR','2026-04-15'),
     ('VE','2025-01-08'), ('VN','2025-05-25'),
+    ('CD','2025-01-27'), ('BD','2025-03-14'), ('ES','2025-08-15'),
+    ('ES','2025-08-22'), ('ES','2025-08-29'), ('IR','2025-12-31'), ('UA','2026-03-20'),
+    ('BR','2026-08-17'), ('IQ','2025-10-20'), ('IR','2026-04-16'), ('RU','2025-03-20'),
 }
-OTHER_EVENTS = {('KZ', '2026-08-13')}  # Recorded as a Telegram outage.
+OTHER_EVENTS = {
+    ('KZ', '2026-08-13'),  # Recorded as a Telegram outage.
+    ('KZ', '2025-10-24'),  # Access issues; the supplied description does not establish blocking.
+    ('ES', '2025-01-12'), ('ES', '2025-07-13'), ('VE', '2025-03-29'),
+    ('ZW', '2025-03-31'), ('GB', '2026-06-15'),
+}
 
 
 def member_parameters(parameters, member, training_maximum, series_maximum):

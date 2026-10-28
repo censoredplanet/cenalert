@@ -118,15 +118,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--results', type=Path, required=True)
     parser.add_argument('--cache', type=Path, required=True)
-    parser.add_argument('--previous-results', type=Path, required=True)
+    parser.add_argument('--previous-results', type=Path,
+                        help='Optional prior results for comparing training calibration counts.')
     parser.add_argument('--minimum-group-countries', type=int, default=4)
     parser.add_argument('--diagnostic-directory', type=Path)
     args = parser.parse_args()
     root, cache = args.results.resolve(), args.cache.resolve()
     context_path = root / 'contextualization.json'
     context = read(context_path)
-    previous_context = read(args.previous_results / 'contextualization.json')
-    assert read(root/'inputs/labels.json') == read(args.previous_results/'inputs/labels.json')
+    previous_context = None
+    if args.previous_results:
+        previous_context = read(args.previous_results / 'contextualization.json')
+        assert read(root/'inputs/training-labels.json') == read(args.previous_results/'inputs/training-labels.json')
     key = str(args.minimum_group_countries)
     if args.minimum_group_countries < 2:
         parser.error('minimum group size must be at least two')
@@ -156,7 +159,7 @@ def main():
     write_csv(root/'event-review.csv', notifications + result['event_differences'] + other_events)
     result['alert_quality'] = alert_quality(analysis, result, 4)
     review = ensemble_only(context, analysis.labels, analysis.first_test, analysis.config['test_end'])
-    changes = calibration_changes(previous_context, context)
+    changes = calibration_changes(previous_context, context) if previous_context else []
     result['submission_review'] = dict(ensemble_only=review, calibration_changes=changes)
     if args.diagnostic_directory:
         destination = args.diagnostic_directory.resolve()

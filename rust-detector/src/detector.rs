@@ -23,6 +23,13 @@ pub(crate) trait DenseScorer {
     fn idle_threshold(&mut self, _window: &mut SlidingWindow) -> Option<f64> {
         None
     }
+    fn diagnostic_threshold(
+        &mut self,
+        _window: &SlidingWindow,
+        _date: chrono::NaiveDate,
+    ) -> Option<f64> {
+        None
+    }
 }
 
 pub struct ChebyshevDetector {
@@ -250,6 +257,14 @@ impl<S: DenseScorer> DetectorState<S> {
         self.active_anomaly =
             (new_anomaly || self.active_anomaly) && !(return_to_normal || new_normal);
 
+        let diagnostic_threshold = if !self.active_anomaly && !new_anomaly && !sparse && value > 0.0
+        {
+            self.scorer
+                .diagnostic_threshold(&self.window, annotated[index].date)
+        } else {
+            None
+        };
+
         let mut threshold = None;
         if new_anomaly {
             self.intermittent_anomaly = sparse;
@@ -292,6 +307,8 @@ impl<S: DenseScorer> DetectorState<S> {
         annotated[index].score = finite_or_infinite(score);
         annotated[index].residual = finite_or_infinite(residual);
         annotated[index].threshold = finite_or_infinite_option(stored_threshold);
+        annotated[index].diagnostic_threshold =
+            diagnostic_threshold.filter(|value| value.is_finite());
         annotated[index].minimum_score = finite_or_infinite(self.minimum_score);
         annotated[index].coefficient_of_variation_squared =
             finite_or_infinite_option(coefficient_of_variation_squared);
@@ -375,6 +392,8 @@ fn normalize(annotated: &mut [AnnotatedObservation], reference_maximum: Option<f
             point.value /= scale_factor;
             point.residual = point.residual.map(|value| value / scale_factor);
             point.threshold = point.threshold.map(|value| value / scale_factor);
+            point.diagnostic_threshold =
+                point.diagnostic_threshold.map(|value| value / scale_factor);
         }
     }
     scale_factor

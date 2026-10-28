@@ -1,5 +1,8 @@
 """Regression tests for event coverage, label sampling, and notification counts."""
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 from analyze_paper_results import (
     Analysis, kept, label_kind, member_parameters, rejected_episodes, sampling_threshold, severity,
@@ -11,9 +14,75 @@ from analyze_notification_outcomes import (
 )
 from prepare_paper_figures import group_summary, matched_notifications, same_day_groups
 from review_contextualization import grouping_key
+from plot_detection_cases import plot_threshold
+from repair_evaluation_dates import reconstruct
+from analyze_explained_impact import analyze as analyze_impact, country_impact_rows, replace_section
+from download_dashboard_series import download_country
 
 
 class PaperAnalysisTests(unittest.TestCase):
+    def test_impact_report_preserves_following_sections(self):
+        original = '# Results\n\n## Explained impact\nold\n\n## Data reconstruction\nkeep\n'
+        updated = replace_section(original, '## Explained impact', '## Explained impact\nnew')
+        self.assertIn('## Data reconstruction\nkeep\n', updated)
+        self.assertNotIn('old', updated)
+        self.assertEqual(updated.count('## Explained impact'), 1)
+
+    def test_dashboard_download_validates_and_sorts_observations(self):
+        records = [dict(country='RU', date='2025-01-02', rate=2),
+                   dict(country='RU', date='2025-01-01', rate=1)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch('download_dashboard_series.graphql_request',
+                       return_value={'cenalertTimeseries': records}):
+                summary = download_country('unused', 'RU', root, 0)
+                self.assertEqual(summary['first_date'], '2025-01-01')
+                self.assertEqual(summary['observations'], 2)
+            saved = (root / 'RU.json').read_bytes()
+            for bad in ([records[0], records[0]], [dict(country='RU', date='2025-01-01', rate=-1)]):
+                with patch('download_dashboard_series.graphql_request',
+                           return_value={'cenalertTimeseries': bad}):
+                    with self.assertRaises(RuntimeError):
+                        download_country('unused', 'RU', root, 0)
+                self.assertEqual((root / 'RU.json').read_bytes(), saved)
+
+    def test_explained_impact_counts_intervals_once_and_weights_countries_equally(self):
+        labels = [dict(scope='country', country_code='AA', date='2025-01-01',
+                       description='Block', metadata={'category':'filtering'}),
+                  dict(scope='global', date='2025-01-01', description='Game')]
+        rows = [dict(country=c, variant='labels_ensemble', selection='knee',
+                     raw_anomalies=a, retained_anomalies=a) for c,a in [
+            ('AA',[dict(start='2025-01-01',impact=90),dict(start='2025-02-01',impact=10)]),
+            ('BB',[dict(start='2025-02-01',impact=10)])]]
+        result = analyze_impact(dict(train_end='2024-12-31',test_end='2026-08-31',
+                                    country_proximity_days=3,countries=rows),labels)
+        s = result['summaries'][0]
+        self.assertEqual(s['anomalies'],3)
+        self.assertEqual(s['total_impact'],110)
+        self.assertEqual(s['categories'][0]['cumulative_impact'],90)
+        self.assertEqual(s['categories'][1]['anomalies'],0)
+        self.assertAlmostEqual(s['mean_country_explained_share'],.45)
+        plotted = country_impact_rows(result, limit=1)
+        self.assertEqual([r[0] for r in plotted], ['AA', 'Remaining 1 countries'])
+        self.assertEqual(sum(c['cumulative_impact'] for _, row in plotted for c in row.values()),110)
+        self.assertEqual(sum(c['anomalies'] for _, row in plotted for c in row.values()),3)
+
+    def test_repair_uses_preceding_date_pairs_and_excludes_bad_dates(self):
+        original = {'2025-01-01': 2, '2025-01-02': 400, '2025-01-03': 6,
+                    '2025-01-04': 80, '2025-01-05': 800}
+        sample = {'2025-01-05': 1, '2025-01-04': 5, '2025-01-03': 3,
+                  '2025-01-02': 1, '2025-01-01': 1}
+        value, scale, pairs = reconstruct(original, sample, '2025-01-04',
+                                          ['2025-01-02', '2025-01-04'], 2)
+        self.assertEqual((value, scale, pairs), (10, 2, 2))
+        self.assertIsNone(reconstruct(original, sample, '2025-01-04', [], 4)[0])
+        self.assertEqual(reconstruct({}, {'2025-01-04': 0}, '2025-01-04', [], 10)[0], 0)
+
+    def test_case_plot_preserves_stored_impact_threshold(self):
+        self.assertEqual(plot_threshold(dict(threshold=3, diagnostic_threshold=4)), 3)
+        self.assertEqual(plot_threshold(dict(threshold=None, diagnostic_threshold=4)), 4)
+        self.assertIsNone(plot_threshold(dict(threshold=None)))
+
     def test_standalone_sparse_threshold_preserves_training_scale(self):
         p = dict(window=60,min_residual_ratio=.2,efficiency=.05,chebyshev_z=3,
                  chebyshev_k=5,isolation_forest_min_score=.6,lof_min_score=1.2)

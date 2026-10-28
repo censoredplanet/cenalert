@@ -11,6 +11,15 @@ from run_daily import arguments, normalize_series, run, stitch
 
 
 class DailyTests(unittest.TestCase):
+    def test_stitching_aligns_overlap_by_date(self):
+        import pandas as pd
+        from lib.stitching import stitch_two_windows_ratio_coarse
+        old = pd.DataFrame({'date': ['2025-01-01', '2025-01-02'], 'value': [20., 40.]})
+        new = pd.DataFrame({'date': ['2025-01-02', '2025-01-01', '2025-01-03'],
+                            'value': [4., 2., 3.]})
+        result = stitch_two_windows_ratio_coarse(old, new, None, None, set(old.date))
+        self.assertEqual(result.value.to_list(), [20., 40., 30.])
+
     def setUp(self):
         self.fixture = test_snapshot.SnapshotTests()
         self.fixture.setUp()

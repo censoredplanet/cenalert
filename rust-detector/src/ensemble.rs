@@ -6,12 +6,14 @@ use crate::model::{
     Observation,
 };
 use crate::window::SlidingWindow;
+use chrono::NaiveDate;
 
 const REQUIRED_VOTES: u8 = 2;
 
 pub struct EnsembleDetector {
     parameters: EnsembleParameters,
     reference_maximum: Option<f64>,
+    threshold_dates: Option<(NaiveDate, NaiveDate)>,
 }
 
 impl EnsembleDetector {
@@ -19,11 +21,19 @@ impl EnsembleDetector {
         Self {
             parameters,
             reference_maximum: None,
+            threshold_dates: None,
         }
     }
 
     pub fn with_reference_maximum(mut self, maximum: f64) -> Self {
         self.reference_maximum = Some(maximum);
+        self
+    }
+
+    /// Estimate inverse-score thresholds on idle dense days for case figures.
+    pub fn with_threshold_diagnostics(mut self, first: NaiveDate, last: NaiveDate) -> Self {
+        assert!(first <= last);
+        self.threshold_dates = Some((first, last));
         self
     }
 }
@@ -37,6 +47,7 @@ impl Detector for EnsembleDetector {
             parameters.min_residual_ratio,
             parameters.efficiency,
             EnsembleScorer {
+                threshold_dates: self.threshold_dates,
                 chebyshev: ChebyshevScorer::new(DetectorParameters {
                     window: parameters.window,
                     z: parameters.chebyshev_z,
@@ -58,6 +69,7 @@ impl Detector for EnsembleDetector {
 }
 
 struct EnsembleScorer {
+    threshold_dates: Option<(NaiveDate, NaiveDate)>,
     chebyshev: ChebyshevScorer,
     isolation_forest: IsolationForestScorer,
     lof: LocalOutlierFactorScorer,
@@ -87,6 +99,44 @@ impl DenseScorer for EnsembleScorer {
             self.lof.threshold(window, value),
         ])
     }
+
+    fn diagnostic_threshold(&mut self, window: &SlidingWindow, date: NaiveDate) -> Option<f64> {
+        let (first, last) = self.threshold_dates?;
+        if date < first || date > last || window.is_empty() {
+            return None;
+        }
+        let mut history = window.clone();
+        let mean = history.mean();
+        let step = history.std().max(mean.abs() * 1e-6).max(1e-8);
+        let values = history.values();
+        let threshold = majority_threshold([
+            self.chebyshev.threshold(&mut history, mean),
+            inverse_score_threshold(mean, step, self.isolation_forest.minimum_score, |value| {
+                crate::isolation_forest::isolation_forest_score(&values, value)
+            }),
+            inverse_score_threshold(mean, step, self.lof.minimum_score, |value| {
+                crate::lof::local_outlier_factor_score(&values, value, self.lof.window)
+            }),
+        ]);
+        threshold.is_finite().then_some(threshold)
+    }
+}
+
+/// Bracket the upper-tail score crossing before applying the impact-threshold
+/// inversion. The observed value is not a valid upper bound on an idle day.
+fn inverse_score_threshold(mean: f64, step: f64, target: f64, score: impl Fn(f64) -> f64) -> f64 {
+    let mut width = step;
+    for _ in 0..32 {
+        let upper = mean + width;
+        if !upper.is_finite() {
+            break;
+        }
+        if score(upper) >= target {
+            return crate::lof::bounded_threshold(mean, upper, score, target);
+        }
+        width *= 2.0;
+    }
+    f64::INFINITY
 }
 
 fn majority_threshold(mut thresholds: [f64; 3]) -> f64 {
@@ -121,6 +171,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn inverse_threshold_brackets_values_above_observed_history() {
+        let threshold = inverse_score_threshold(10.0, 1.0, 30.0, |value| value);
+        assert!((threshold - 30.0).abs() < 1e-4);
+        assert!(inverse_score_threshold(10.0, 1.0, 2.0, |_| 1.0).is_infinite());
+    }
+
+    #[test]
+    fn threshold_diagnostics_preserve_detection_and_are_date_limited() {
+        let start = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let observations: Vec<_> = (0..100)
+            .map(|index| Observation {
+                date: start + chrono::Duration::days(index),
+                value: if (65..70).contains(&index) {
+                    100.0
+                } else {
+                    10.0 + (index % 7) as f64
+                },
+                country: None,
+                topic: None,
+            })
+            .collect();
+        let parameters = EnsembleParameters {
+            window: 30,
+            min_residual_ratio: 0.1,
+            efficiency: 0.01,
+            chebyshev_z: 3.0,
+            chebyshev_k: 5.0,
+            isolation_forest_min_score: 0.6,
+            lof_min_score: 1.2,
+        };
+        let first = start + chrono::Duration::days(60);
+        let last = start + chrono::Duration::days(75);
+        let ordinary = EnsembleDetector::new(parameters)
+            .with_reference_maximum(200.0)
+            .detect(&observations);
+        let diagnostic = EnsembleDetector::new(parameters)
+            .with_reference_maximum(200.0)
+            .with_threshold_diagnostics(first, last)
+            .detect(&observations);
+        assert_eq!(ordinary.anomalies, diagnostic.anomalies);
+        assert_eq!(ordinary.scale_factor, diagnostic.scale_factor);
+        assert!(diagnostic
+            .annotated
+            .iter()
+            .any(|point| point.diagnostic_threshold.is_some()));
+        for (expected, mut actual) in ordinary.annotated.into_iter().zip(diagnostic.annotated) {
+            if actual.date < first || actual.date > last {
+                assert!(actual.diagnostic_threshold.is_none());
+            }
+            actual.diagnostic_threshold = None;
+            assert_eq!(expected, actual);
+        }
+    }
+
+    #[test]
     fn threshold_is_second_smallest_in_any_member_order() {
         for thresholds in [
             [10.0, 20.0, 30.0],
@@ -152,6 +257,7 @@ mod tests {
             window.insert(10.0 + (index % 7) as f64, index + 1);
         }
         let mut scorer = EnsembleScorer {
+            threshold_dates: None,
             chebyshev: ChebyshevScorer::new(DetectorParameters {
                 window: 60,
                 z: 4.0,
