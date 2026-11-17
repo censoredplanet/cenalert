@@ -1,0 +1,4 @@
+**
+!rust-detector/
+!rust-detector/scripts/
+!rust-detector/scripts/serve_snapshot.py

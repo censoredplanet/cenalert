@@ -1,0 +1,11 @@
+**
+!dashboard/
+!dashboard/package.json
+!dashboard/package-lock.json
+!dashboard/observablehq.config.js
+!dashboard/nginx.conf
+!dashboard/src/
+!dashboard/src/**
+dashboard/src/.observablehq/
+dashboard/node_modules/
+dashboard/dist/

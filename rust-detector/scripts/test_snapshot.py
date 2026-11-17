@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from build_snapshot import build_snapshot, display_fields, read_series
 from export_snapshot import export_snapshot
+from snapshot_from_results import publish
 
 
 class SnapshotTests(unittest.TestCase):
@@ -90,6 +91,19 @@ class SnapshotTests(unittest.TestCase):
             build_snapshot(self.args)
         self.assertEqual(self.args.output.read_bytes(), b"previous snapshot")
 
+    def test_fixed_reference_and_global_matching_window(self):
+        self.args.reference_end = '2024-12-31'
+        self.args.labels.write_text(json.dumps([
+            {'date': '2025-01-03', 'scope': 'global', 'title': 'Outside window'},
+            {'date': '2025-01-02', 'scope': 'global', 'title': 'Within window'}]))
+        with self.run_detector() as detector:
+            build_snapshot(self.args)
+        command = detector.call_args.args[0]
+        self.assertEqual(command[-2:], ['--reference-end', '2024-12-31'])
+        with sqlite3.connect(self.args.output) as db:
+            self.assertEqual(db.execute('SELECT title FROM events').fetchone(), ('Within window',))
+            self.assertEqual(dict(db.execute('SELECT * FROM metadata'))['reference_end'], '2024-12-31')
+
     def test_legacy_description_not_split_into_services(self):
         fields = display_fields({"metadata": {"affected_services": "News coverage, followed by debate"}})
         self.assertEqual(json.loads(fields[-2]), ["News coverage, followed by debate"])
@@ -99,6 +113,31 @@ class SnapshotTests(unittest.TestCase):
         path.write_text("date,value\n2025-01-01,1\n2025-01-01,2\n")
         with self.assertRaises(ValueError):
             read_series(path, "AA", "vpn")
+
+    def test_saved_results_replay_and_mismatch_preserves_snapshot(self):
+        results = self.root / 'results'
+        inputs = results / 'inputs'
+        run = results / 'runs/42/AA/labels_ensemble'
+        inputs.mkdir(parents=True)
+        run.mkdir(parents=True)
+        (results / 'experiment.json').write_text(json.dumps(
+            {'countries': ['AA'], 'train_end': '2024-12-31'}))
+        (inputs / 'labels.json').write_text(self.args.labels.read_text())
+        (inputs / 'AA-evaluation.json').write_text(json.dumps(
+            [{'date': '2025-01-01', 'rate': 200, 'country': 'AA', 'topic': 'vpn'}]))
+        (run / 'result.json').write_text('{"status":"completed"}')
+        (run / 'knee-parameters.json').write_text('{}')
+        expected = run / 'knee-detection.json'
+        expected.write_text(json.dumps(self.result))
+        with self.run_detector():
+            publish(results, self.args.output)
+        previous = self.args.output.read_bytes()
+        saved = json.loads(expected.read_text())
+        saved['anomalies'][0]['impact'] = 999
+        expected.write_text(json.dumps(saved))
+        with self.run_detector(), self.assertRaisesRegex(ValueError, 'replay differs on impact'):
+            publish(results, self.args.output)
+        self.assertEqual(self.args.output.read_bytes(), previous)
 
 
 if __name__ == "__main__":

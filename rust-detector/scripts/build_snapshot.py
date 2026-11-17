@@ -92,6 +92,9 @@ def display_fields(label):
 
 
 def build_snapshot(args):
+    reference_end = getattr(args, "reference_end", None)
+    if reference_end:
+        date.fromisoformat(reference_end)
     labels = json.loads(args.labels.read_text())
     if not isinstance(labels, list) or not labels:
         raise ValueError("labels must be a nonempty array")
@@ -132,7 +135,9 @@ def build_snapshot(args):
             connection.executemany("INSERT INTO metadata VALUES (?, ?)", [
                 ("schema_version", "2"), ("created_at", datetime.now(timezone.utc).isoformat()),
                 ("event_layer", "raw"), ("proximity_days", str(args.proximity_days)),
-                ("reference_policy", "full_series_maximum"),
+                ("reference_policy", "fixed_cutoff" if reference_end else "full_series_maximum"),
+                ("reference_end", reference_end or ""),
+                ("global_proximity_days", str(min(args.proximity_days, 1))),
             ])
             for index, label in enumerate(labels):
                 connection.execute("INSERT INTO labels VALUES (?, ?, ?)",
@@ -143,9 +148,12 @@ def build_snapshot(args):
                 source.write_text(json.dumps(rows))
                 parameter_file.write_text(json.dumps(parameters))
                 try:
-                    process = subprocess.run([str(args.rust_binary.resolve()), "detect",
+                    command = [str(args.rust_binary.resolve()), "detect",
                         "--input", str(source), "--parameters", str(parameter_file),
-                        "--algorithm", args.algorithm, "--include-annotated"], capture_output=True, text=True, check=True)
+                        "--algorithm", args.algorithm, "--include-annotated"]
+                    if reference_end:
+                        command.extend(["--reference-end", reference_end])
+                    process = subprocess.run(command, capture_output=True, text=True, check=True)
                 except subprocess.CalledProcessError as error:
                     detail = (error.stderr or "").strip() or "no diagnostic output"
                     raise RuntimeError(f"{country}: detection failed (exit {error.returncode}): {detail}") from None
@@ -177,6 +185,7 @@ def build_snapshot(args):
                          labels.index(label) if match else None,
                          match["distance_days"] if match else None,
                          *display_fields(label), json.dumps(anomaly)))
+                print(f"{country}: {len(rows)} observations, {len(detection['anomalies'])} events", flush=True)
             connection.commit()
             if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
                 raise ValueError("snapshot integrity check failed")
@@ -197,6 +206,7 @@ def main():
     parser.add_argument("--topic", default="vpn")
     parser.add_argument("--algorithm", choices=["chebyshev", "ensemble", "isolation-forest", "lof"], default="ensemble")
     parser.add_argument("--proximity-days", type=int, default=3)
+    parser.add_argument("--reference-end", help="Keep normalization fixed to the maximum through this date (YYYY-MM-DD)")
     args = parser.parse_args()
     if args.proximity_days < 0:
         parser.error("proximity-days must be non-negative")

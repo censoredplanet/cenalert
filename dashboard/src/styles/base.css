@@ -1,0 +1,19 @@
+@import url('observablehq:default.css');
+@import url('observablehq:theme-glacier.css') (prefers-color-scheme: light);
+@import url('observablehq:theme-ocean-floor.css') (prefers-color-scheme: dark);
+@import url('observablehq:theme-alt.css');
+
+:root {
+  --font-sans: 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --color-text-primary: var(--theme-foreground);
+  --color-text-secondary: var(--theme-foreground-muted);
+  --color-accent: #1e90ff;
+  --bg-alt: var(--theme-background-alt);
+  --border: var(--theme-foreground-faintest);
+  --text: var(--theme-foreground);
+  --text-light: var(--theme-foreground-muted);
+  --plot-text: var(--text);
+  --plot-line: var(--text);
+  --plot-grid: var(--text-light);
+  --plot-bg: transparent;
+}

@@ -1,0 +1,8 @@
+FROM python:3.13-slim-bookworm
+RUN pip install --no-cache-dir gunicorn==23.0.0 \
+    && useradd --uid 10001 --create-home cenalert
+WORKDIR /app
+COPY rust-detector/scripts/serve_snapshot.py ./
+USER cenalert
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--access-logfile", "-", "serve_snapshot:application"]

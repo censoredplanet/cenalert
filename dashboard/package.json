@@ -1,0 +1,24 @@
+{
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "clean": "rimraf src/.observablehq/cache",
+    "build": "observable build",
+    "dev": "observable preview",
+    "observable": "observable",
+    "format": "prettier \"src/**/*.{js,mjs,cjs,css}\" --write",
+    "format:check": "prettier \"src/**/*.{js,mjs,cjs,css}\" --check"
+  },
+  "dependencies": {
+    "@observablehq/framework": "^1.13.3",
+    "d3-dsv": "^3.0.1",
+    "d3-time-format": "^4.1.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.8.1",
+    "rimraf": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

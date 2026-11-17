@@ -1,0 +1,15 @@
+.download-links {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #eee;
+  font-family: var(--sans-serif);
+  font-size: 12px;
+  text-align: right;
+  color: #666;
+}
+
+.download-links a {
+  color: #17827b;
+  font-weight: bold;
+  text-decoration: none;
+}
