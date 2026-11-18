@@ -64,6 +64,19 @@ Series and events accept `start` and `end` (YYYY-MM-DD), `limit` (1–20000),
 and `offset`. Events use interval overlap for date filtering. Countries use
 uppercase ISO codes. Each request reads the current snapshot.
 
+For events, omit `country` to query all countries. Optional event filters are:
+
+- `labelMatched=true` or `false`: anomalies with or without a matching label.
+- `category`, `cause`, `justification`: exact field values, ignoring ASCII case.
+- `affectedServices`: an exact member of the service list, ignoring ASCII case.
+
+Filters are combined with AND and applied before pagination. For example,
+`/api/events?category=filtering&affectedServices=Facebook&labelMatched=true`
+returns label-matched filtering anomalies involving Facebook across countries.
+`/api/events?labelMatched=false&start=2025-01-01` returns unmatched anomalies
+overlapping that period. An event here is a detected anomaly interval with its
+matched label metadata; labels without a detection are not returned.
+
 ```sh
 python3 -m unittest discover -s rust-detector/scripts -p test_api.py
 ```

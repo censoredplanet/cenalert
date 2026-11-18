@@ -43,6 +43,8 @@ def arguments(argv=None):
     parser.add_argument("--api-key-file", type=Path,
                         help="Alternatively set GOOGLE_TRENDS_API_KEY")
     parser.add_argument("--proximity-days", type=int, default=3)
+    parser.add_argument("--reference-end", type=date.fromisoformat,
+                        help="Normalization cutoff used when selecting the saved parameters")
     parser.add_argument("--plots", action="store_true")
     parser.add_argument("--plan", action="store_true", help="Validate local configuration without running stages")
     args = parser.parse_args(argv)
@@ -50,6 +52,9 @@ def arguments(argv=None):
         parser.error("sample-count must be positive; proximity-days must be non-negative")
     if args.series_directory and args.previous_stitched:
         parser.error("previous-stitched is only used with download or samples-directory")
+    if args.reference_end and (args.reference_end > args.through_date or
+                               args.algorithm not in ("ensemble", "chebyshev")):
+        parser.error("reference-end must not exceed through-date and requires ensemble or chebyshev")
     if args.start_month:
         try:
             month = datetime.strptime(args.start_month, "%Y-%m").date()
@@ -220,7 +225,8 @@ def run(args):
                 parameters_directory=parameters, labels=stage / "labels.json",
                 rust_binary=args.rust_binary, output=stage / "cenalert.sqlite",
                 countries=args.countries, topic=args.topic, algorithm=args.algorithm,
-                proximity_days=args.proximity_days))
+                proximity_days=args.proximity_days,
+                reference_end=args.reference_end.isoformat() if args.reference_end else None))
             export_snapshot(stage / "cenalert.sqlite", stage / "detection")
             preview(stage / "cenalert.sqlite", stage / "preview", args.through_date + timedelta(days=1), args.plots)
             manifest = dict(created_at=datetime.now(timezone.utc).isoformat(), topic=args.topic,
@@ -228,10 +234,12 @@ def run(args):
                 source="download" if args.download else "samples" if args.samples_directory else "series",
                 sample_count=args.sample_count if not args.series_directory else None,
                 previous_stitched=str(args.previous_stitched.resolve()) if args.previous_stitched else None,
+                reference_end=args.reference_end.isoformat() if args.reference_end else None,
                 event_layer="raw", notifications_sent=False)
             (stage / "run.json").write_text(json.dumps(manifest, indent=2) + "\n")
             name = "run-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S-%fZ")
             destination = args.output_root / name
+            stage.chmod(0o755)
             os.rename(stage, destination)
             link = stage.parent / "current"
             link.symlink_to(name)

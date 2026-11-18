@@ -40,6 +40,7 @@ class DailyTests(unittest.TestCase):
         current = self.args.output_root / "current"
         previous = current.resolve()
         self.assertTrue((current / "cenalert.sqlite").is_file())
+        self.assertEqual(current.stat().st_mode & 0o777, 0o755)
         self.assertTrue((current / "detection/AA/anomalies.csv").is_file())
         self.assertTrue((current / "preview/manifest.json").is_file())
         manifest = json.loads((current / "run.json").read_text())
@@ -62,6 +63,14 @@ class DailyTests(unittest.TestCase):
         self.args.plan = True
         run(self.args)
         self.assertFalse(self.args.output_root.exists())
+
+    def test_fixed_normalization_cutoff(self):
+        self.args.reference_end = date(2024, 12, 31)
+        with self.fixture.run_detector() as detector:
+            run(self.args)
+        self.assertEqual(detector.call_args.args[0][-2:], ['--reference-end', '2024-12-31'])
+        manifest = json.loads((self.args.output_root / 'current/run.json').read_text())
+        self.assertEqual(manifest['reference_end'], '2024-12-31')
 
     def test_concurrent_run_is_rejected(self):
         self.args.output_root.mkdir()

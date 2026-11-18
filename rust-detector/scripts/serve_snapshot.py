@@ -74,6 +74,8 @@ def create_app(database):
 
 def read_endpoint(conn, path, args, metadata):
     allowed = {"country", "start", "end", "limit", "offset"} if path in ("/api/series", "/api/events") else set()
+    if path == "/api/events":
+        allowed |= {"labelMatched", "category", "cause", "justification", "affectedServices"}
     if set(args) - allowed:
         raise ValueError("Unknown query parameter")
     if path == "/api/health":
@@ -100,6 +102,22 @@ def read_endpoint(conn, path, args, metadata):
         where.append("country=?")
         values.append(country)
     series = path == "/api/series"
+    if not series:
+        if "labelMatched" in args:
+            if args["labelMatched"] not in ("true", "false"):
+                raise ValueError("labelMatched must be true or false")
+            where.append("label_index IS NOT NULL" if args["labelMatched"] == "true" else "label_index IS NULL")
+        for field in ("category", "cause", "justification", "affectedServices"):
+            if field not in args:
+                continue
+            value = args[field].strip()
+            if not value:
+                raise ValueError(f"{field} must not be empty")
+            if field == "affectedServices":
+                where.append("EXISTS (SELECT 1 FROM json_each(events.affected_services) WHERE value = ? COLLATE NOCASE)")
+            else:
+                where.append(f"{field} = ? COLLATE NOCASE")
+            values.append(value)
     for key, column, op in (("start", "date" if series else "end", ">="),
                             ("end", "date" if series else "start", "<=")):
         if key in args:

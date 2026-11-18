@@ -574,6 +574,12 @@ data aborts publication. Add `--plan` to check local paths and JSON syntax
 without running stages; actual parameter and label semantics are validated
 by detection. Add `--plots` to render preview charts.
 
+For parameters tuned with a fixed normalization cutoff, pass the same
+`--reference-end YYYY-MM-DD` on every daily run. For the paper parameters this
+is `--reference-end 2024-12-31`. The input series must include that history.
+Point the dashboard's `CENALERT_DATA_ROOT` at `--output-root`; the API reads
+each newly published `current/cenalert.sqlite` without restarting.
+
 For live collection, replace `--series-directory` with `--download` and provide
 `--api-key-file /private/path/api_key.txt` (or `GOOGLE_TRENDS_API_KEY`). Never put
 the key itself in command arguments or Git. Without `--previous-stitched`, the

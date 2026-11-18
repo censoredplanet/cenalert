@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.parse import urlencode
 
 from build_snapshot import SCHEMA
 from serve_snapshot import create_app, resolve_snapshot, with_static_files
@@ -55,6 +56,34 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.request('/api/series', 'country=ZZ')[1], [])
         self.assertEqual(self.request('/api/events', method='POST')[0], '405 Method Not Allowed')
         self.assertEqual(self.request('/missing')[0], '404 Not Found')
+
+    def test_event_filters(self):
+        with closing(sqlite3.connect(self.database)) as db, db:
+            db.execute("INSERT INTO labels VALUES (0, 'example', '{}')")
+            db.execute("INSERT INTO countries VALUES ('ID','vpn','ensemble','{}',1)")
+            db.execute("INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       ('ID', '2025-02-01', '2025-02-02', '2025-02-02', 30, 3, 0,
+                        0, 1, 'Restriction', 'Example', 'filtering', 'Protests',
+                        'public_safety', '["Facebook", "Instagram"]', '[]', '{}'))
+        self.assertEqual(len(self.request('/api/events')[1]), 2)
+        for filters in (
+            {'labelMatched': 'true'}, {'affectedServices': 'facebook'},
+            {'cause': 'protests'}, {'justification': 'PUBLIC_SAFETY'},
+            {'category': 'filtering', 'affectedServices': 'Instagram', 'country': 'ID',
+             'labelMatched': 'true', 'start': '2025-02-02', 'limit': 1},
+        ):
+            status, events = self.request('/api/events', urlencode(filters))
+            self.assertEqual(status, '200 OK')
+            self.assertEqual([e['country'] for e in events], ['ID'], filters)
+        self.assertEqual(self.request('/api/events', 'labelMatched=false')[1][0]['country'], 'RU')
+        self.assertEqual(self.request('/api/events', 'category=filtering&limit=1&offset=1')[1][0]['country'], 'RU')
+        for query in ('affectedServices=Face', 'cause=unknown', 'country=RU&affectedServices=Facebook',
+                      'labelMatched=true&offset=1', urlencode({'category': "' OR 1=1 --"})):
+            self.assertEqual(self.request('/api/events', query)[1], [], query)
+        for query in ('labelMatched=yes', 'labelMatched=', 'category=', 'cause=+',
+                      'justification=', 'affectedServices=', 'category=a&category=b'):
+            self.assertEqual(self.request('/api/events', query)[0], '400 Bad Request', query)
+        self.assertEqual(self.request('/api/series', 'country=RU&labelMatched=true')[0], '400 Bad Request')
 
     def test_current_symlink_refresh(self):
         current = self.root / 'current.sqlite'
