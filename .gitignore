@@ -6,3 +6,10 @@ rust-detector/.venv/
 rust-detector/.venv-runtime/
 /api_key.txt
 rust-detector/target/
+rust-detector/vendor/*/target/
+rust-detector/vendor/*/Cargo.lock
+
+# Local publisher inputs and output
+/data/
+/parameters/
+/daily/

@@ -10,7 +10,6 @@ from unittest.mock import patch
 
 from build_snapshot import build_snapshot, display_fields, read_series
 from export_snapshot import export_snapshot
-from snapshot_from_results import publish
 
 
 class SnapshotTests(unittest.TestCase):
@@ -113,31 +112,6 @@ class SnapshotTests(unittest.TestCase):
         path.write_text("date,value\n2025-01-01,1\n2025-01-01,2\n")
         with self.assertRaises(ValueError):
             read_series(path, "AA", "vpn")
-
-    def test_saved_results_replay_and_mismatch_preserves_snapshot(self):
-        results = self.root / 'results'
-        inputs = results / 'inputs'
-        run = results / 'runs/42/AA/labels_ensemble'
-        inputs.mkdir(parents=True)
-        run.mkdir(parents=True)
-        (results / 'experiment.json').write_text(json.dumps(
-            {'countries': ['AA'], 'train_end': '2024-12-31'}))
-        (inputs / 'labels.json').write_text(self.args.labels.read_text())
-        (inputs / 'AA-evaluation.json').write_text(json.dumps(
-            [{'date': '2025-01-01', 'rate': 200, 'country': 'AA', 'topic': 'vpn'}]))
-        (run / 'result.json').write_text('{"status":"completed"}')
-        (run / 'knee-parameters.json').write_text('{}')
-        expected = run / 'knee-detection.json'
-        expected.write_text(json.dumps(self.result))
-        with self.run_detector():
-            publish(results, self.args.output)
-        previous = self.args.output.read_bytes()
-        saved = json.loads(expected.read_text())
-        saved['anomalies'][0]['impact'] = 999
-        expected.write_text(json.dumps(saved))
-        with self.run_detector(), self.assertRaisesRegex(ValueError, 'replay differs on impact'):
-            publish(results, self.args.output)
-        self.assertEqual(self.args.output.read_bytes(), previous)
 
 
 if __name__ == "__main__":

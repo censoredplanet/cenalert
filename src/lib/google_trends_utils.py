@@ -1,8 +1,6 @@
 import datetime
 import time
 import os
-import secrets
-import string
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 
@@ -17,10 +15,6 @@ DISCOVERY_URL_SUFFIX = '/$discovery/rest?version=' + API_VERSION
 DISCOVERY_URL = SERVER + DISCOVERY_URL_SUFFIX
 
 CURRENT_DATE_STR = datetime.date.today().strftime("%Y-%m-%d")
-
-def generate_random_string(length=20):
-    characters = string.ascii_lowercase + string.digits
-    return ''.join(secrets.choice(characters) for _ in range(length))
 
 def error_check(logger, error, delay=60):
     logger.error(error.args)
@@ -41,12 +35,9 @@ def tlvl_gparse(graph, dest, fname):
         return 0
 
 def get_multi_timeline(service, logger, dest,fname, start_date_str, end_date_str, country_code, topic: str = VPN_GT_TOPIC_CODE, attempts=10, strict=False):
-    # append a random string to force api refresh
-    random_str = generate_random_string(20)
-    topics = f"{topic} + {random_str} + {topic.upper()}"
     for i in range(attempts):
         try:
-            graph = service.getGraph(terms=topics, 
+            graph = service.getGraph(terms=topic,
                                      restrictions_startDate=start_date_str, restrictions_endDate=end_date_str, 
                                      restrictions_geo=country_code)
             response = graph.execute()
@@ -63,6 +54,9 @@ def get_multi_timeline(service, logger, dest,fname, start_date_str, end_date_str
         except Exception as error:
             if strict:
                 # API exception strings can include the credential-bearing URL.
+                status = getattr(getattr(error, 'resp', None), 'status', None)
+                if status is not None and 400 <= status < 500 and status not in (408, 429):
+                    raise RuntimeError(f'Google Trends request rejected for {country_code} (HTTP {status})') from None
                 logger.warning('Google Trends request failed for %s (attempt %s/%s)', country_code, i + 1, attempts)
                 if i + 1 < attempts:
                     time.sleep(min(60, (i + 1) * 5))

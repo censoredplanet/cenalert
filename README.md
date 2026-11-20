@@ -1,112 +1,51 @@
 # CenAlert
 
-This repository contains the implementation of the *CenAlert* deployment.
+CenAlert detects spikes in Google Trends search interest and presents them with
+documented event labels. A daily publisher collects and stitches samples, runs
+the Rust detector with saved parameters, and publishes a SQLite snapshot. The
+API and dashboard serve that snapshot.
 
-The Rust-backed daily pipeline is documented in
-[rust-detector/README.md](rust-detector/README.md#daily-pipeline-and-e2e-testing).
-It supports offline inputs and Google Trends downloads, and publishes SQLite
-snapshots with local notification previews. Live downloads require an API key;
-this pipeline does not send Slack messages. The instructions below describe the
-legacy Python deployment, including its Slack integration.
+## Start the dashboard
 
----
+Install Docker Compose and prepare a snapshot using the
+[daily pipeline](rust-detector/README.md#daily-updates).
+Set the absolute directory containing `current/cenalert.sqlite`:
 
-## Setup
+```sh
+export CENALERT_DATA_ROOT=/absolute/path/to/daily
+export CENALERT_PORT=8080
+docker compose up --build -d --wait
+```
 
-### Requirements
+Open http://127.0.0.1:8080. Use **All time** when viewing historical data.
+Check the API at http://127.0.0.1:8080/api/health.
 
-- Python 3.8 to 3.12
+The data directory is mounted read-only. Each successful daily update replaces
+the `current` symlink; the API reads the new snapshot without restarting.
+The publisher runs separately from the web containers. Containers restart
+automatically; place the localhost-bound dashboard behind an HTTPS reverse
+proxy for public deployment.
 
-Install Python dependencies:
+```sh
+docker compose logs --tail=100 api dashboard
+docker compose down
+```
 
-    pip3 install -r requirements.txt
+## Components
 
----
+- `rust-detector/`: detection, parameter tuning, filtering, and daily publication.
+- `src/`: Google Trends collection and time-series stitching used by the publisher.
+- `dashboard/`: web frontend, nginx configuration, and API documentation.
+- `compose.yaml`: API and dashboard services.
 
-## Directory Structure
+## Configuration and maintenance
 
-The project directories are organized by Google Trends **topics** and **countries**, with all top-level paths defined in the config file (`bin/config.sh`).
+Keep collected data, labels, saved parameters, and credentials outside the
+repository. Each country needs a `<CC>.json` parameter file. Updates use these
+parameters; tuning is a separate operation.
 
-At a high level, the repository contains:
+- [Build, tune, and run daily updates](rust-detector/README.md)
+- [Frontend development and API filters](dashboard/README.md)
 
-    data/                           # raw data by <topic>/<country>/
-    stitched_output/                # stitched time series by topic
-    final_output/                   # final processed results (e.g., anomalies)
-    ChebyshevPreferredFinal/        # intermediate chebyshev-based output
-    ChebyshevPreferredFinal_Scaled/ # scaled chebyshev output
-    alerts_output/                  # alerts and anomaly outputs
-
-Inside each **topic** directory, data is organized by country:
-
-    data/
-      <topic>/
-        <country>/
-          ...
-    stitched_output/
-      <topic>/
-        <country>/
-    final_output/
-      <topic>/
-        <country>/
-    ChebyshevPreferredFinal/
-      <topic>/
-        <country files>
-    ChebyshevPreferredFinal_Scaled/
-      <topic>/
-        <country files>/
-    alerts_output/
-      <topic>/
-        data/
-
----
-
-## Bootstrapping CenAlert
-
-Before the daily pipeline can run, *CenAlert* must be bootstrapped with historical data:
-
-### 1. Download Raw Google Trends Data
-
-Run the update script with a start month:
-
-    python3 src/update_samples.py --start-month YYYY-MM
-
-This downloads raw Google Trends data starting from `YYYY-MM` in the `data/` directory under the chosen topic and country. Each downloaded window is sampled 45 times.
-
-### 2. Stitching
-
-The raw data can be stitched into a single time series with the following command:
-
-    python3 src/firsttime_stitch.py --sample_dir <window_samples_directory> --output_dir <output_dir>
-
-This generates the initial stitched files (e.g., `US_stitched.csv`) inside `stitched_output/`.
-
----
-
-## Running CenAlert
-
-After bootstrapping, the daily pipeline can be run:
-
-    bash bin/pipeline_driver.sh
-
-The pipeline will:
-
-1. Collect the latest raw data for a specified topic
-2. Stitch the newly collected data together with the historical time series
-3. Perform spike detection on the resulting time series
-4. Send Slack notifications of newly detected spikes  
-
----
-
-## Config Reference
-
-Directory names and key parameters are defined in `bin/config.sh`. Example:
-
-    SCALED_PARAM="ChebyshevPreferredFinal_Scaled"
-    TOPIC="vpn"
-    BASE_ROOT="data"
-    STITCHED_ROOT="stitched_output"
-    RESULTS="final_output"
-    PARAM="ChebyshevPreferredFinal"
-    ALERTS="alerts_output"
-
----
+The API exposes raw anomaly intervals and matching label metadata. The daily
+publisher produces local notification previews; it does not deliver messages.

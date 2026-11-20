@@ -7,11 +7,15 @@
 !rust-detector/requirements-runtime.txt
 !rust-detector/src/
 !rust-detector/src/**
+!rust-detector/vendor/
+!rust-detector/vendor/**
+rust-detector/vendor/**/target/
+rust-detector/vendor/**/Cargo.lock
 !rust-detector/scripts/
 !rust-detector/scripts/build_snapshot.py
 !rust-detector/scripts/export_snapshot.py
 !rust-detector/scripts/preview_notifications.py
-!rust-detector/scripts/batch_ensemble_tuning.py
+!rust-detector/scripts/label_matching.py
 !rust-detector/scripts/run_daily.py
 !src/
 !src/stitching_job.py

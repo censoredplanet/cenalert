@@ -25,17 +25,7 @@ use All time when previewing historical snapshots.
 
 ## Containers
 
-To populate a dashboard from saved label-constrained ensemble results, replay
-the knee-selected parameters and check every event against the saved detections:
-
-```sh
-python3 rust-detector/scripts/snapshot_from_results.py \
-  --results /absolute/path/to/results \
-  --output /absolute/path/to/dashboard-data/current/cenalert.sqlite
-```
-
-The command uses the archived series, labels, detector binary, and training
-normalization cutoff. It verifies the replay before publishing the snapshot.
+Populate the snapshot with the [daily publisher](../rust-detector/README.md#daily-updates).
 
 Set the data root containing `current/cenalert.sqlite`, then start the API
 and dashboard. For daily publication, `current` is a symlink to a run directory.

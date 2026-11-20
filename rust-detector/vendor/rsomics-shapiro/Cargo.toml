@@ -1,0 +1,10 @@
+[package]
+name = "rsomics-shapiro"
+version = "0.1.1"
+edition = "2024"
+license = "MIT"
+authors = ["Zane Leong <efd@live.com>"]
+publish = false
+
+[lib]
+path = "src/lib.rs"

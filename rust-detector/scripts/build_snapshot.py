@@ -12,7 +12,7 @@ import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from batch_ensemble_tuning import label_country_code, matched_label
+from label_matching import label_country_code, matched_label
 
 
 SCHEMA = """

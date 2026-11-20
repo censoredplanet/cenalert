@@ -1,5 +1,6 @@
 import fcntl
 import json
+import logging
 import os
 import unittest
 from datetime import date
@@ -8,9 +9,31 @@ from unittest.mock import patch, Mock
 
 import test_snapshot
 from run_daily import arguments, normalize_series, run, stitch
+from lib.google_trends_utils import get_multi_timeline
 
 
 class DailyTests(unittest.TestCase):
+    def test_query_and_sample_output(self):
+        service = Mock()
+        service.getGraph.return_value.execute.return_value = {
+            'lines': [{'points': [{'date': '2026-11-18', 'value': 12}]}]}
+        get_multi_timeline(service, logging.getLogger(__name__), str(self.root),
+                           'sample.csv', '2026-06', '2026-11', 'PK', 'vpn', strict=True)
+        self.assertEqual(service.getGraph.call_args.kwargs['terms'], 'vpn')
+        self.assertIn('2026-11-18', (self.root / 'sample.csv').read_text())
+
+    def test_invalid_request_is_not_retried_or_logged_with_credentials(self):
+        error = Exception('credential-bearing URL')
+        error.resp = Mock(status=400)
+        service = Mock()
+        service.getGraph.return_value.execute.side_effect = error
+        with patch('lib.google_trends_utils.time.sleep') as sleep:
+            with self.assertRaisesRegex(RuntimeError, r'^Google Trends request rejected for PK \(HTTP 400\)$'):
+                get_multi_timeline(service, logging.getLogger(__name__), str(self.root),
+                                   'sample.csv', '2026-06', '2026-11', 'PK', 'vpn', strict=True)
+            self.assertEqual(service.getGraph.call_count, 1)
+            sleep.assert_not_called()
+
     def test_stitching_aligns_overlap_by_date(self):
         import pandas as pd
         from lib.stitching import stitch_two_windows_ratio_coarse
